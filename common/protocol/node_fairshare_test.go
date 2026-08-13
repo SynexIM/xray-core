@@ -248,6 +248,100 @@ func TestMemberLazyCleanup(t *testing.T) {
 	}
 }
 
+// ---- 只配承诺速率（CIR）的用户也要有天花板 ----
+
+// fairOwnLimitBytesPerSecond 的真值表：实际天花板 = PIR 有就用 PIR，没有退到 CIR，
+// 都没有才是 0（= 无天花板）。
+func TestFairOwnLimitFallsBackToCommitted(t *testing.T) {
+	cases := []struct {
+		name string
+		pir  uint64
+		cir  uint64
+		want uint64
+	}{
+		{"两个都没有 = 无天花板", 0, 0, 0},
+		{"只有 PIR", 80_000_000, 0, 10_000_000},
+		{"只有 CIR：天花板就是 CIR", 0, 8_000_000, 1_000_000},
+		{"双速率：天花板是 PIR", 80_000_000, 8_000_000, 10_000_000},
+		// CIR > PIR 是配错，内核忽略 CIR 退化成单速率 PIR，天花板同样是 PIR。
+		{"CIR 高于 PIR：仍以 PIR 为天花板", 8_000_000, 80_000_000, 1_000_000},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			u := &MemoryUser{Email: "x", BandwidthBps: c.pir, CommittedBps: c.cir}
+			if got := fairOwnLimitBytesPerSecond(u); got != c.want {
+				t.Errorf("own limit: want %d B/s, got %d", c.want, got)
+			}
+		})
+	}
+	if got := fairOwnLimitBytesPerSecond(nil); got != 0 {
+		t.Errorf("nil user: want 0, got %d", got)
+	}
+}
+
+// memberForDual 造一个带双速率字段的成员。
+func memberForDual(s *NodeFairScheduler, email string, pirBps, cirBps uint64) *fairMember {
+	u := &MemoryUser{Email: email, BandwidthBps: pirBps, CommittedBps: cirBps}
+	if up, _ := s.Member(u); up == nil {
+		return nil
+	}
+	return s.members[email]
+}
+
+// 回归守卫：只配 CIR 的用户在公平分配里必须被自己的 CIR 封顶，
+// 不能因为 BandwidthBps==0 就被当成「无天花板」拿满份额——他跑不满，节点容量空转。
+func TestRecomputeCommittedOnlyUserCappedByOwn(t *testing.T) {
+	s := newSched(100_000_000)                        // 100MB/s avail，只有一个活跃用户 → share = 100MB/s
+	m := memberForDual(s, "cir-only", 0, 160_000_000) // CIR 160Mbps = 20MB/s
+	if m == nil {
+		t.Fatal("member nil (avail not set?)")
+	}
+	m.bytes.Store(1 << 20) // 活跃
+	s.recompute()
+	if got := int(m.upLimiter.Limit()); got != 20_000_000 {
+		t.Errorf("up limit: want own ceiling 20000000 B/s, got %d (只读 BandwidthBps 会得到 share=100000000)", got)
+	}
+	if got := int(m.downLimiter.Limit()); got != 20_000_000 {
+		t.Errorf("down limit: want own ceiling 20000000 B/s, got %d", got)
+	}
+}
+
+// 同一件事的另一半：非活跃分支（applyOwn）也要还原到 CIR 天花板，而不是 avail。
+func TestRecomputeIdleCommittedOnlyRestoresOwn(t *testing.T) {
+	s := newSched(100_000_000)
+	active := memberForDual(s, "act", 640_000_000, 0)  // 80MB/s
+	idle := memberForDual(s, "cir-idle", 0, 8_000_000) // CIR 8Mbps = 1MB/s
+	active.bytes.Store(1 << 20)
+	s.recompute()
+	if got := int(idle.upLimiter.Limit()); got != 1_000_000 {
+		t.Errorf("idle CIR-only: want restored to own ceiling 1000000 B/s, got %d", got)
+	}
+}
+
+// Member 首次建桶时的初始速率也走同一个天花板函数：min(own, avail)。
+func TestMemberInitialRateUsesCommittedCeiling(t *testing.T) {
+	s := newSched(100_000_000)
+	m := memberForDual(s, "fresh", 0, 8_000_000) // CIR 8Mbps = 1MB/s
+	if m == nil {
+		t.Fatal("member nil (avail not set?)")
+	}
+	if got := int(m.upLimiter.Limit()); got != 1_000_000 {
+		t.Errorf("initial limit: want min(own 1000000, avail) = 1000000, got %d", got)
+	}
+}
+
+// 双速率用户的天花板是 PIR：CIR 只在 CBS 花完后压低长期均值，不是天花板，
+// 公平层不该拿 CIR 去掐他的峰值。
+func TestRecomputeDualRateUsesPeakAsCeiling(t *testing.T) {
+	s := newSched(100_000_000)
+	m := memberForDual(s, "dual", 160_000_000, 8_000_000) // PIR 20MB/s, CIR 1MB/s
+	m.bytes.Store(1 << 20)
+	s.recompute()
+	if got := int(m.upLimiter.Limit()); got != 20_000_000 {
+		t.Errorf("dual rate: want PIR ceiling 20000000 B/s, got %d", got)
+	}
+}
+
 // recompute 同步更新 burst = 1/8 秒配额（floor 到单缓冲），防低速时段积累整秒突发。
 func TestSetLimitUpdatesBurst(t *testing.T) {
 	s := newSched(1_000_000)

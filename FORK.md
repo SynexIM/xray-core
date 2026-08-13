@@ -111,6 +111,21 @@ Linux 的 splice 在两个 socket 之间零拷贝直通，会绕过 dispatcher �
 所以公平开启 = 全节点 buffered copy。代价是失去 splice 的极限吞吐。
 这是产品决策：**公平 > 极限吞吐**。公平没启用时 splice 照旧。
 
+### 公平调度里「这个用户的天花板」怎么算
+
+`fairOwnLimitBytesPerSecond` 返回的 0 在三个调用点（`Member` 建桶、`recompute`
+活跃分支、`applyOwn` 非活跃分支）都是「这个用户没有自己的上限」的意思。
+所以它必须返回**实际天花板**：`bandwidth_bps` 非 0 就用它，否则退到
+`committed_bps`，两个都是 0 才返回 0。
+
+只读 `bandwidth_bps` 会让「只买了承诺速率」的客户（PIR=0、CIR>0，语义上就是单速率
+CIR）在公平分配里被当成无天花板：拥挤时他分到一份自己根本跑不满的份额
+（per-user 承诺桶还压着他），这部分节点容量就空转了。这跟
+「PIR = 0 且设了 CIR = 单速率 CIR」的双速率语义是同一件事。
+
+双速率用户的天花板是 **PIR**，不是 CIR——CIR 只在 CBS 花完后拉低长期均值，
+不是他能跑到的最快速度。
+
 ## 有意不改的
 
 - `app/router/command/command.go:170` 的 context 泄漏（`context.WithTimeout`

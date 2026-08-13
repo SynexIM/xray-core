@@ -131,11 +131,26 @@ func (s *NodeFairScheduler) floors() (soft, hard uint64) {
 	return soft, hard
 }
 
+// fairOwnLimitBytesPerSecond 返回这个用户的【实际天花板】（字节/秒），
+// 0 = 他自己没有天花板（调用点据此当作 ∞，只受份额约束）。
+//
+// 为什么不能只看 BandwidthBps：双速率语义里「PIR = 0 且设了 CIR」等于单速率 CIR
+// （见 RuntimeRateLimiters）。只读 BandwidthBps 的话，这种用户会返回 0，
+// 而 0 在 recompute / applyOwn / Member 三个调用点都是「无天花板」的意思——
+// 结果是只买了承诺速率的客户在节点公平里被当成不限速，拥挤时分到他根本跑不满的
+// 份额，节点容量白白空转（他被自己的 per-user 承诺桶压着，多分的部分用不掉）。
+//
+// 实际天花板 = 他能跑到的最快速度：有 PIR 时是 PIR（CIR 只在 CBS 花完后才压更低，
+// 那是长期均值，不是天花板），没有 PIR 时 CIR 就是天花板。
 func fairOwnLimitBytesPerSecond(user *MemoryUser) uint64 {
-	if user == nil || user.BandwidthBps == 0 {
+	if user == nil {
 		return 0
 	}
-	return bitsPerSecondToRuntimeBytesPerSecond(user.BandwidthBps)
+	ceiling := user.BandwidthBps
+	if ceiling == 0 {
+		ceiling = user.CommittedBps
+	}
+	return bitsPerSecondToRuntimeBytesPerSecond(ceiling)
 }
 
 // Member 取（或懒建）某 user 的公平成员，返回上/下行桶。节点公平未开启时返回 (nil,nil)
