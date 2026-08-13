@@ -10,7 +10,8 @@ import (
 
 func TestUserStoreBootAccountsCarryLimits(t *testing.T) {
 	store := http.NewUserStore(2, nil, []*http.UserAccount{
-		{Username: "alice", Password: "pw1", BandwidthBps: 1000, ConnLimit: 3},
+		{Username: "alice", Password: "pw1", BandwidthBps: 1000, ConnLimit: 3,
+			CommittedBps: 400, CommittedBurstBytes: 5000},
 		{Username: "bob", Password: "pw2"},
 	})
 
@@ -23,6 +24,19 @@ func TestUserStoreBootAccountsCarryLimits(t *testing.T) {
 	}
 	if u.Level != 2 {
 		t.Fatalf("alice level = %d, want 2", u.Level)
+	}
+	// 双速率也要一路走到 MemoryUser：静态入站这条路不经过 protocol.User，
+	// 只在这里把配置翻成用户，漏掉就是静默不生效。
+	if u.CommittedBps != 400 || u.CommittedBurstBytes != 5000 {
+		t.Fatalf("alice 双速率 = %d/%d, want 400/5000", u.CommittedBps, u.CommittedBurstBytes)
+	}
+
+	b, ok := store.Authenticate("bob", "pw2")
+	if !ok {
+		t.Fatal("bob should authenticate")
+	}
+	if b.CommittedBps != 0 || b.CommittedBurstBytes != 0 {
+		t.Fatalf("bob 没配双速率却冒出值：%d/%d", b.CommittedBps, b.CommittedBurstBytes)
 	}
 
 	// Same pointer every time so fair-share / conn counting stays per-user.

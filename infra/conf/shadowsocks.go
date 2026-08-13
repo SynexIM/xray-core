@@ -40,6 +40,10 @@ type ShadowsocksUserConfig struct {
 	// 所以所有协议的配置写法完全一致。
 	BandwidthBps uint64 `json:"bandwidth_bps"`
 	ConnLimit    uint32 `json:"conn_limit"`
+	// 双速率（可选）。committed_bps 是承诺速率 CIR，committed_burst_bytes 是
+	// 突发额度 CBS（字节，留空 = 一天的承诺量）。语义见 protocol.User。
+	CommittedBps        uint64 `json:"committed_bps"`
+	CommittedBurstBytes uint64 `json:"committed_burst_bytes"`
 }
 
 type ShadowsocksServerConfig struct {
@@ -54,6 +58,10 @@ type ShadowsocksServerConfig struct {
 	// 所以所有协议的配置写法完全一致。
 	BandwidthBps uint64 `json:"bandwidth_bps"`
 	ConnLimit    uint32 `json:"conn_limit"`
+	// 双速率（可选）。committed_bps 是承诺速率 CIR，committed_burst_bytes 是
+	// 突发额度 CBS（字节，留空 = 一天的承诺量）。语义见 protocol.User。
+	CommittedBps        uint64 `json:"committed_bps"`
+	CommittedBurstBytes uint64 `json:"committed_burst_bytes"`
 }
 
 func (v *ShadowsocksServerConfig) Build() (proto.Message, error) {
@@ -87,11 +95,13 @@ func (v *ShadowsocksServerConfig) Build() (proto.Message, error) {
 					return errors.New("unsupported cipher method: ", user.Cipher)
 				}
 				config.Users[idx] = &protocol.User{
-					Email:        user.Email,
-					Level:        uint32(user.Level),
-					Account:      serial.ToTypedMessage(account),
-					BandwidthBps: user.BandwidthBps,
-					ConnLimit:    user.ConnLimit,
+					Email:               user.Email,
+					Level:               uint32(user.Level),
+					Account:             serial.ToTypedMessage(account),
+					BandwidthBps:        user.BandwidthBps,
+					ConnLimit:           user.ConnLimit,
+					CommittedBps:        user.CommittedBps,
+					CommittedBurstBytes: user.CommittedBurstBytes,
 				}
 				return nil
 			}
@@ -111,11 +121,13 @@ func (v *ShadowsocksServerConfig) Build() (proto.Message, error) {
 			return nil, errors.New("unknown cipher method: ", v.Cipher)
 		}
 		config.Users = append(config.Users, &protocol.User{
-			Email:        v.Email,
-			Level:        uint32(v.Level),
-			Account:      serial.ToTypedMessage(account),
-			BandwidthBps: v.BandwidthBps,
-			ConnLimit:    v.ConnLimit,
+			Email:               v.Email,
+			Level:               uint32(v.Level),
+			Account:             serial.ToTypedMessage(account),
+			BandwidthBps:        v.BandwidthBps,
+			ConnLimit:           v.ConnLimit,
+			CommittedBps:        v.CommittedBps,
+			CommittedBurstBytes: v.CommittedBurstBytes,
 		})
 	}
 
@@ -155,11 +167,13 @@ func buildShadowsocks2022(v *ShadowsocksServerConfig) (proto.Message, error) {
 				Key: user.Password,
 			}
 			config.Users[idx] = &protocol.User{
-				Email:        user.Email,
-				Level:        uint32(user.Level),
-				Account:      serial.ToTypedMessage(account),
-				BandwidthBps: user.BandwidthBps,
-				ConnLimit:    user.ConnLimit,
+				Email:               user.Email,
+				Level:               uint32(user.Level),
+				Account:             serial.ToTypedMessage(account),
+				BandwidthBps:        user.BandwidthBps,
+				ConnLimit:           user.ConnLimit,
+				CommittedBps:        user.CommittedBps,
+				CommittedBurstBytes: user.CommittedBurstBytes,
 			}
 			return nil
 		}

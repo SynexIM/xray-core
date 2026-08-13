@@ -78,13 +78,17 @@ func (x *Account) GetPassword() string {
 // limits (bandwidth + connection caps). 0 means unlimited. The runtime AddUser
 // path carries the same limits on the top-level protocol.User instead.
 type UserAccount struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
-	Password      string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
-	BandwidthBps  uint64                 `protobuf:"varint,3,opt,name=bandwidth_bps,json=bandwidthBps,proto3" json:"bandwidth_bps,omitempty"`
-	ConnLimit     uint32                 `protobuf:"varint,4,opt,name=conn_limit,json=connLimit,proto3" json:"conn_limit,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Username     string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
+	Password     string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
+	BandwidthBps uint64                 `protobuf:"varint,3,opt,name=bandwidth_bps,json=bandwidthBps,proto3" json:"bandwidth_bps,omitempty"`
+	ConnLimit    uint32                 `protobuf:"varint,4,opt,name=conn_limit,json=connLimit,proto3" json:"conn_limit,omitempty"`
+	// Dual-rate shaping, same meaning as protocol.User: committed_bps is the CIR
+	// and committed_burst_bytes the CBS. 0 keeps plain single-rate behaviour.
+	CommittedBps        uint64 `protobuf:"varint,5,opt,name=committed_bps,json=committedBps,proto3" json:"committed_bps,omitempty"`
+	CommittedBurstBytes uint64 `protobuf:"varint,6,opt,name=committed_burst_bytes,json=committedBurstBytes,proto3" json:"committed_burst_bytes,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *UserAccount) Reset() {
@@ -141,6 +145,20 @@ func (x *UserAccount) GetBandwidthBps() uint64 {
 func (x *UserAccount) GetConnLimit() uint32 {
 	if x != nil {
 		return x.ConnLimit
+	}
+	return 0
+}
+
+func (x *UserAccount) GetCommittedBps() uint64 {
+	if x != nil {
+		return x.CommittedBps
+	}
+	return 0
+}
+
+func (x *UserAccount) GetCommittedBurstBytes() uint64 {
+	if x != nil {
+		return x.CommittedBurstBytes
 	}
 	return 0
 }
@@ -329,13 +347,15 @@ const file_proxy_http_config_proto_rawDesc = "" +
 	"\x17proxy/http/config.proto\x12\x0fxray.proxy.http\x1a!common/protocol/server_spec.proto\"A\n" +
 	"\aAccount\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
-	"\bpassword\x18\x02 \x01(\tR\bpassword\"\x89\x01\n" +
+	"\bpassword\x18\x02 \x01(\tR\bpassword\"\xe2\x01\n" +
 	"\vUserAccount\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
 	"\bpassword\x18\x02 \x01(\tR\bpassword\x12#\n" +
 	"\rbandwidth_bps\x18\x03 \x01(\x04R\fbandwidthBps\x12\x1d\n" +
 	"\n" +
-	"conn_limit\x18\x04 \x01(\rR\tconnLimit\"\xa3\x02\n" +
+	"conn_limit\x18\x04 \x01(\rR\tconnLimit\x12#\n" +
+	"\rcommitted_bps\x18\x05 \x01(\x04R\fcommittedBps\x122\n" +
+	"\x15committed_burst_bytes\x18\x06 \x01(\x04R\x13committedBurstBytes\"\xa3\x02\n" +
 	"\fServerConfig\x12G\n" +
 	"\baccounts\x18\x02 \x03(\v2+.xray.proxy.http.ServerConfig.AccountsEntryR\baccounts\x12+\n" +
 	"\x11allow_transparent\x18\x03 \x01(\bR\x10allowTransparent\x12\x1d\n" +

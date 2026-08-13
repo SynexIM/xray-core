@@ -32,6 +32,10 @@ message UserAccount {
   string password = 2;
   uint64 bandwidth_bps = 3;
   uint32 conn_limit = 4;
+  // Dual-rate shaping, same meaning as protocol.User: committed_bps is the CIR
+  // and committed_burst_bytes the CBS. 0 keeps plain single-rate behaviour.
+  uint64 committed_bps = 5;
+  uint64 committed_burst_bytes = 6;
 }
 
 // ServerConfig is the protobuf config for Socks server.

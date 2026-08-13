@@ -38,6 +38,10 @@ type HysteriaUserConfig struct {
 	// 所以所有协议的配置写法完全一致。
 	BandwidthBps uint64 `json:"bandwidth_bps"`
 	ConnLimit    uint32 `json:"conn_limit"`
+	// 双速率（可选）。committed_bps 是承诺速率 CIR，committed_burst_bytes 是
+	// 突发额度 CBS（字节，留空 = 一天的承诺量）。语义见 protocol.User。
+	CommittedBps        uint64 `json:"committed_bps"`
+	CommittedBurstBytes uint64 `json:"committed_burst_bytes"`
 }
 
 type HysteriaServerConfig struct {
@@ -64,11 +68,13 @@ func (c *HysteriaServerConfig) Build() (proto.Message, error) {
 				Auth: user.Auth,
 			}
 			config.Users[idx] = &protocol.User{
-				Email:        user.Email,
-				Level:        user.Level,
-				Account:      serial.ToTypedMessage(acc),
-				BandwidthBps: user.BandwidthBps,
-				ConnLimit:    user.ConnLimit,
+				Email:               user.Email,
+				Level:               user.Level,
+				Account:             serial.ToTypedMessage(acc),
+				BandwidthBps:        user.BandwidthBps,
+				ConnLimit:           user.ConnLimit,
+				CommittedBps:        user.CommittedBps,
+				CommittedBurstBytes: user.CommittedBurstBytes,
 			}
 			return nil
 		}

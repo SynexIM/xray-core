@@ -57,6 +57,8 @@ type LimitedAccount interface {
 	GetPassword() string
 	GetBandwidthBps() uint64
 	GetConnLimit() uint32
+	GetCommittedBps() uint64
+	GetCommittedBurstBytes() uint64
 }
 
 // NewUserStore builds a store from boot accounts. level is the inbound user
@@ -70,23 +72,39 @@ func NewUserStore[T LimitedAccount](level uint32, accounts map[string]string, us
 		emailKey: make(map[string]string),
 	}
 	for username, password := range accounts {
-		s.set(username, password, 0, 0)
+		s.set(username, password, limits{})
 	}
 	for _, ua := range userAccounts {
-		s.set(ua.GetUsername(), ua.GetPassword(), ua.GetBandwidthBps(), ua.GetConnLimit())
+		s.set(ua.GetUsername(), ua.GetPassword(), limits{
+			bandwidthBps:        ua.GetBandwidthBps(),
+			connLimit:           ua.GetConnLimit(),
+			committedBps:        ua.GetCommittedBps(),
+			committedBurstBytes: ua.GetCommittedBurstBytes(),
+		})
 	}
 	return s
 }
 
-func (s *UserStore) set(username, password string, bandwidthBps uint64, connLimit uint32) {
+// limits 把一个用户的四个限速字段捆成一个参数，免得 set 变成一串裸数字
+// ——那种签名下多加一个字段就很容易在某个调用点漏掉，而漏掉是静默的。
+type limits struct {
+	bandwidthBps        uint64
+	connLimit           uint32
+	committedBps        uint64
+	committedBurstBytes uint64
+}
+
+func (s *UserStore) set(username, password string, l limits) {
 	if username == "" {
 		return
 	}
 	s.users[username] = &protocol.MemoryUser{
-		Email:        username,
-		Level:        s.level,
-		BandwidthBps: bandwidthBps,
-		ConnLimit:    connLimit,
+		Email:               username,
+		Level:               s.level,
+		BandwidthBps:        l.bandwidthBps,
+		ConnLimit:           l.connLimit,
+		CommittedBps:        l.committedBps,
+		CommittedBurstBytes: l.committedBurstBytes,
 	}
 	s.password[username] = password
 	s.emailKey[username] = username

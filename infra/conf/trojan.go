@@ -112,6 +112,10 @@ type TrojanUserConfig struct {
 	// 所以所有协议的配置写法完全一致。
 	BandwidthBps uint64 `json:"bandwidth_bps"`
 	ConnLimit    uint32 `json:"conn_limit"`
+	// 双速率（可选）。committed_bps 是承诺速率 CIR，committed_burst_bytes 是
+	// 突发额度 CBS（字节，留空 = 一天的承诺量）。语义见 protocol.User。
+	CommittedBps        uint64 `json:"committed_bps"`
+	CommittedBurstBytes uint64 `json:"committed_burst_bytes"`
 }
 
 // TrojanServerConfig is Inbound configuration
@@ -145,8 +149,10 @@ func (c *TrojanServerConfig) Build() (proto.Message, error) {
 			Account: serial.ToTypedMessage(&trojan.Account{
 				Password: rawUser.Password,
 			}),
-			BandwidthBps: rawUser.BandwidthBps,
-			ConnLimit:    rawUser.ConnLimit,
+			BandwidthBps:        rawUser.BandwidthBps,
+			ConnLimit:           rawUser.ConnLimit,
+			CommittedBps:        rawUser.CommittedBps,
+			CommittedBurstBytes: rawUser.CommittedBurstBytes,
 		}
 		return nil
 	}

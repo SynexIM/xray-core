@@ -15,6 +15,10 @@ type SocksAccount struct {
 	Password     string `json:"pass"`
 	BandwidthBps uint64 `json:"bandwidth_bps"`
 	ConnLimit    uint32 `json:"conn_limit"`
+	// 双速率（可选）。committed_bps 是承诺速率 CIR，committed_burst_bytes 是
+	// 突发额度 CBS（字节，留空 = 一天的承诺量）。语义见 protocol.User。
+	CommittedBps        uint64 `json:"committed_bps"`
+	CommittedBurstBytes uint64 `json:"committed_burst_bytes"`
 }
 
 func (v *SocksAccount) Build() *socks.Account {
@@ -61,10 +65,12 @@ func (v *SocksServerConfig) Build() (proto.Message, error) {
 		config.UserAccounts = make([]*socks.UserAccount, 0, len(v.Users))
 		for _, account := range v.Users {
 			config.UserAccounts = append(config.UserAccounts, &socks.UserAccount{
-				Username:     account.Username,
-				Password:     account.Password,
-				BandwidthBps: account.BandwidthBps,
-				ConnLimit:    account.ConnLimit,
+				Username:            account.Username,
+				Password:            account.Password,
+				BandwidthBps:        account.BandwidthBps,
+				ConnLimit:           account.ConnLimit,
+				CommittedBps:        account.CommittedBps,
+				CommittedBurstBytes: account.CommittedBurstBytes,
 			})
 		}
 	}
