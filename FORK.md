@@ -88,6 +88,19 @@ CBS 在这里是业务额度，不是防锯齿的窗口。承诺速率卖的是�
   「能以峰值速率花掉多少」，没有峰值速率时它无处可花；照搬 CBS 当 burst
   会让只填了 CIR 的用户先白拿几十 GB 不限速额度。
 
+双速率有三层测试，缺一层就会留下一段「只靠编译保证」的空白：
+
+| 层 | 文件 | 证明什么 |
+|---|---|---|
+| 配置 | `infra/conf/limits_matrix_test.go` | 每个协议都真的解析出三个字段 |
+| 桶 | `common/protocol/dual_rate_test.go` | 桶串对了（虚拟时钟，无 sleep） |
+| link | `app/dispatcher/dual_rate_link_test.go` | dispatcher 真的把桶挂到了 link 上，**且四个方向都挂了** |
+
+link 层是真推字节量速率的：突发段应在 PIR 附近，CBS 烧干后稳态段应落在 CIR 附近。
+四个方向分别测——`getLink` 的上行/下行、`WrapLink` 的 Reader/Writer——因为
+`getLink` 的两条独立管道方向极易搞错（历史上上行漏过限速），只测一个方向
+另一个方向漏了不会有任何提示。
+
 ### 为什么 reverse 要能热改
 
 控制面给客户换入口是常规操作。配置只在启动时读一次的话，换一个客户的入口
