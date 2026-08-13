@@ -30,10 +30,12 @@ func TestSocksInboundConfig(t *testing.T) {
 				"userLevel": 1
 			}`,
 			Parser: loadJSON(creator),
+			// 同 http：静态账号搬到了带限速字段的 user_accounts，
+			// map<string,string> 装不下限速，静态账号就永远限不了速。
 			Output: &socks.ServerConfig{
 				AuthType: socks.AuthType_PASSWORD,
-				Accounts: map[string]string{
-					"my-username": "my-password",
+				UserAccounts: []*socks.UserAccount{
+					{Username: "my-username", Password: "my-password"},
 				},
 				UdpEnabled: false,
 				Address: &net.IPOrDomain{
