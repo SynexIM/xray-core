@@ -817,8 +817,9 @@ func requiresBufferedCopy(user *protocol.MemoryUser) bool {
 	if protocol.FairScheduler().Enabled() {
 		return true
 	}
-	bandwidthBps, connLimit := user.RuntimeLimits()
-	return bandwidthBps != 0 || connLimit != 0
+	// 必须问「有没有任何限制」，不能只问 bandwidth_bps：只配了承诺速率（CIR）的
+	// 用户 bandwidth_bps 是 0，漏判就会走 splice，限速配了却一个字节都限不住。
+	return user.HasRuntimeLimits()
 }
 
 func readV(ctx context.Context, reader buf.Reader, writer buf.Writer, timer signal.ActivityUpdater, readCounter stats.Counter) error {

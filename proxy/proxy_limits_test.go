@@ -16,6 +16,8 @@ func TestRequiresBufferedCopyForGovernedUser(t *testing.T) {
 		{name: "unlimited user", user: &protocol.MemoryUser{}, want: false},
 		{name: "bandwidth limited user", user: &protocol.MemoryUser{BandwidthBps: 10_000_000}, want: true},
 		{name: "connection limited user", user: &protocol.MemoryUser{ConnLimit: 200}, want: true},
+		// 只配了承诺速率的用户 BandwidthBps 是 0。漏判 = 走 splice = 限速一个字节都不生效。
+		{name: "committed-rate only user", user: &protocol.MemoryUser{CommittedBps: 8_000_000}, want: true},
 	}
 
 	for _, tt := range tests {

@@ -38,6 +38,23 @@ func (u *MemoryUser) RuntimeLimits() (bandwidthBps uint64, connLimit uint32) {
 	return u.BandwidthBps, u.ConnLimit
 }
 
+// HasRuntimeLimits 回答一个问题：这个用户身上有没有任何一条需要 dispatcher
+// 亲自整形的限制。
+//
+// 存在的理由是 splice：Linux 的 splice 在两个 socket 之间零拷贝直通，会绕过
+// dispatcher 挂在 link 上的限速包装器，所以「受限用户」必须强制走 buffered copy
+// （见 proxy.requiresBufferedCopy）。判断条件必须覆盖**所有**限速字段——
+// 只填 committed_bps 的用户 BandwidthBps 是 0，若只看 BandwidthBps，
+// 他会被判成不受限而走 splice，限速配了却一个字节都限不住。
+//
+// committed_burst_bytes 不在判断里：CBS 单独存在（没有 CIR）不构成任何限制。
+func (u *MemoryUser) HasRuntimeLimits() bool {
+	if u == nil {
+		return false
+	}
+	return u.BandwidthBps != 0 || u.ConnLimit != 0 || u.CommittedBps != 0
+}
+
 // RuntimeRateLimiters returns the user's shared token buckets, in the order the
 // bytes must pass through them (loose → tight). All concurrent links for the
 // same MemoryUser consume from these same buckets.

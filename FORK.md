@@ -104,6 +104,10 @@ Linux 的 splice 在两个 socket 之间零拷贝直通，会绕过 dispatcher �
 限速包装器。没有 per-user 限速的用户既逃掉公平整形，也不进活跃字节统计
 （不占公平份额的分母），拥挤时会挤压守规矩的用户。
 
+判「这个用户受不受限」要用 `MemoryUser.HasRuntimeLimits()`，它覆盖所有限速字段。
+只看 `bandwidth_bps` 会漏掉只配了承诺速率（CIR）的用户——他的 `bandwidth_bps`
+是 0，会被判成不受限而走 splice，限速配了却一个字节都限不住。
+
 所以公平开启 = 全节点 buffered copy。代价是失去 splice 的极限吞吐。
 这是产品决策：**公平 > 极限吞吐**。公平没启用时 splice 照旧。
 

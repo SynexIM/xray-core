@@ -246,3 +246,26 @@ func TestLimiterRebuiltWhenAnyRateFieldChanges(t *testing.T) {
 	}
 	user.ResetRuntimeLimiter()
 }
+
+// splice 会绕过 dispatcher 挂的限速包装器，所以「身上有任何限制」的用户都必须
+// 被判出来强制走 buffered copy。只填 CIR 的用户 BandwidthBps 是 0——
+// 只看 BandwidthBps 的话他会被当成不受限，走 splice，限速配了却一个字节都限不住。
+func TestHasRuntimeLimitsCoversEveryField(t *testing.T) {
+	cases := []struct {
+		name string
+		user *MemoryUser
+		want bool
+	}{
+		{"什么都不设", &MemoryUser{}, false},
+		{"只设峰值", &MemoryUser{BandwidthBps: 1}, true},
+		{"只设连接数", &MemoryUser{ConnLimit: 1}, true},
+		{"只设承诺速率", &MemoryUser{CommittedBps: 1}, true},
+		{"只设突发额度", &MemoryUser{CommittedBurstBytes: 1}, false}, // CBS 单独存在不构成限制
+		{"nil 用户", nil, false},
+	}
+	for _, c := range cases {
+		if got := c.user.HasRuntimeLimits(); got != c.want {
+			t.Errorf("%s：HasRuntimeLimits() = %v，期望 %v", c.name, got, c.want)
+		}
+	}
+}
