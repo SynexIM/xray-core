@@ -41,6 +41,8 @@ proxy/http/users.go         给 http 协议补上客户端（email）管理
 | `proxy/http/*` | 客户端管理与限速 |
 | `proxy/vless/inbound/inbound.go` | 删用户时重置限速器与连接数 |
 | `proxy/socks/config.proto` `proxy/http/config.proto` | `UserAccount` 也带双速率字段 |
+| `proxy/shadowsocks_2022/config.proto` | `RelayDestination` 带四个限速字段（relay 没有 User 消息） |
+| `proxy/shadowsocks_2022/inbound_relay.go` | 每个 destination 一个长期 `MemoryUser`；顺带补上漏传的 `level` |
 | `proxy/http/users.go` | `UserStore` 把双速率翻进 `MemoryUser` |
 | `infra/conf/*.go` | 各协议解析 `committed_bps` `committed_burst_bytes` |
 | `infra/conf/api.go` | 注册三个新 command service |
@@ -57,6 +59,22 @@ mixed 全都通过同一个 `ToMemoryUser` 拿到，不需要每个协议各自�
 配置解析**自动就通了**，一行代码都不用加。后来加的 `committed_bps` /
 `committed_burst_bytes` 同样白拿这个好处——不过这一点不靠假设，
 `infra/conf/limits_matrix_test.go` 逐协议实际验证过。
+
+### ss2022 relay 是唯一一个"限速字段放顶层"占不到便宜的地方
+
+relay 模式的配置里根本没有 `User` 消息：每个 `RelayDestination` 自带一个 PSK，
+**它本身就是一个用户**。于是顶层字段的好处在这里失效——走 relay 的客户
+设任何限速都会被静默丢掉，面板显示限住了，节点上一个字节都没限。
+
+所以 `RelayDestination` 自己带上那四个字段（名字与 `protocol.User` 一致），
+`RelayDestination.ToMemoryUser()` 把它翻成 `MemoryUser`，dispatcher 那边就
+一视同仁了。这个方法是导出的，因为 `infra/conf` 的全协议限速矩阵要拿**同一段
+映射**做断言——两边共用一个函数，relay 漏搬字段矩阵就会红。
+
+还有一个不改就白改的地方：原来 `NewConnection` / `NewPacketConnection`
+每来一条连接就 `&protocol.MemoryUser{...}` 现造一个。限速桶是按 `*MemoryUser`
+指针缓存的，现造 = 每条连接一套满桶 = 开 N 条连接就是 N 倍速率。
+现在跟 `MultiUserInbound` 一样，构造时就把 `users[i]` 建好，全程复用。
 
 ### 双速率：PIR / CIR / CBS，以及为什么 CBS 默认是一天的承诺量
 

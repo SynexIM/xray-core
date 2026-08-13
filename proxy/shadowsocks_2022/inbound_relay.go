@@ -37,7 +37,14 @@ func init() {
 type RelayInbound struct {
 	networks     []net.Network
 	destinations []*RelayDestination
-	service      *shadowaead_2022.RelayService[int]
+	// users[i] 对应 destinations[i]，**进程内长期存活、一个 destination 一个**。
+	//
+	// 这一层不是为了好看：每用户限速的桶是按 *MemoryUser 指针缓存的
+	// （见 protocol.RuntimeRateLimiters），每来一条连接就现造一个 MemoryUser 的话，
+	// 每条连接都会拿到一套自己的满桶——限速看着「配上了」，实际开 10 条连接就是 10 倍。
+	// 所以这里跟 MultiUserInbound 一样，把 MemoryUser 提前建好并复用。
+	users   []*protocol.MemoryUser
+	service *shadowaead_2022.RelayService[int]
 }
 
 func NewRelayServer(ctx context.Context, config *RelayServerConfig) (*RelayInbound, error) {
@@ -60,11 +67,13 @@ func NewRelayServer(ctx context.Context, config *RelayServerConfig) (*RelayInbou
 		return nil, errors.New("create service").Base(err)
 	}
 
+	inbound.users = make([]*protocol.MemoryUser, len(config.Destinations))
 	for i, destination := range config.Destinations {
 		if destination.Email == "" {
 			u := uuid.New()
 			destination.Email = "unnamed-destination-" + strconv.Itoa(i) + "-" + u.String()
 		}
+		inbound.users[i] = destination.ToMemoryUser()
 	}
 	err = service.UpdateUsersWithPasswords(
 		C.MapIndexed(config.Destinations, func(index int, it *RelayDestination) int { return index }),
@@ -81,6 +90,32 @@ func NewRelayServer(ctx context.Context, config *RelayServerConfig) (*RelayInbou
 	}
 	inbound.service = service
 	return inbound, nil
+}
+
+// ToMemoryUser 把一个 relay destination 翻成 dispatcher 认识的用户。
+// 限速字段直接搬过去——dispatcher 只认 *MemoryUser，认了就跟别的协议一视同仁。
+//
+// 导出是为了让 infra/conf 的全协议限速矩阵能拿同一段映射做断言：
+// 矩阵和线上走的是同一个函数，这里漏搬一个字段，矩阵就会红。
+func (d *RelayDestination) ToMemoryUser() *protocol.MemoryUser {
+	return &protocol.MemoryUser{
+		Email:               d.Email,
+		Level:               uint32(d.Level),
+		BandwidthBps:        d.BandwidthBps,
+		ConnLimit:           d.ConnLimit,
+		CommittedBps:        d.CommittedBps,
+		CommittedBurstBytes: d.CommittedBurstBytes,
+	}
+}
+
+// userAt 取第 n 个 destination 对应的长期 MemoryUser。索引由 sing 的
+// RelayService 依 PSK 认证结果给出，越界只可能是内部不一致——兜底返回 nil
+// 比 panic 拖崩整个 xray 进程好。
+func (i *RelayInbound) userAt(n int) *protocol.MemoryUser {
+	if n < 0 || n >= len(i.users) {
+		return nil
+	}
+	return i.users[n]
 }
 
 func (i *RelayInbound) Network() []net.Network {
@@ -127,11 +162,11 @@ func (i *RelayInbound) Process(ctx context.Context, network net.Network, connect
 func (i *RelayInbound) NewConnection(ctx context.Context, conn net.Conn, metadata M.Metadata) error {
 	inbound := session.InboundFromContext(ctx)
 	userInt, _ := A.UserFromContext[int](ctx)
-	user := i.destinations[userInt]
-	inbound.User = &protocol.MemoryUser{
-		Email: user.Email,
-		Level: uint32(user.Level),
+	user := i.userAt(userInt)
+	if user == nil {
+		return errors.New("relay destination index out of range: ", userInt)
 	}
+	inbound.User = user
 	ctx = log.ContextWithAccessMessage(ctx, &log.AccessMessage{
 		From:   metadata.Source,
 		To:     metadata.Destination,
@@ -154,11 +189,11 @@ func (i *RelayInbound) NewConnection(ctx context.Context, conn net.Conn, metadat
 func (i *RelayInbound) NewPacketConnection(ctx context.Context, conn N.PacketConn, metadata M.Metadata) error {
 	inbound := session.InboundFromContext(ctx)
 	userInt, _ := A.UserFromContext[int](ctx)
-	user := i.destinations[userInt]
-	inbound.User = &protocol.MemoryUser{
-		Email: user.Email,
-		Level: uint32(user.Level),
+	user := i.userAt(userInt)
+	if user == nil {
+		return errors.New("relay destination index out of range: ", userInt)
 	}
+	inbound.User = user
 	ctx = log.ContextWithAccessMessage(ctx, &log.AccessMessage{
 		From:   metadata.Source,
 		To:     metadata.Destination,

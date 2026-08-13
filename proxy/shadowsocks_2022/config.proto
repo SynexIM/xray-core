@@ -31,6 +31,23 @@ message RelayDestination {
   uint32 port = 3;
   string email = 4;
   int32 level = 5;
+
+  // Per-user runtime limits, same four fields as xray.common.protocol.User.
+  //
+  // Relay mode does not carry a User message: each destination is its own
+  // "user", identified by its own PSK. Without these fields the relay inbound
+  // had no way to express a limit at all — a customer on a relay line could set
+  // any bandwidth cap in the panel and every byte of it was silently dropped on
+  // the floor. Silent no-ops are exactly what this fork exists to prevent, so
+  // the fields live here and inbound_relay.go turns each destination into one
+  // long-lived *protocol.MemoryUser that the dispatcher shapes like any other.
+  //
+  // 0 means unlimited. See common/protocol/user.proto for the PIR/CIR/CBS
+  // semantics — they are identical, this is the same knob on another surface.
+  uint64 bandwidth_bps = 6;
+  uint32 conn_limit = 7;
+  uint64 committed_bps = 8;
+  uint64 committed_burst_bytes = 9;
 }
 
 message RelayServerConfig {

@@ -199,6 +199,13 @@ func buildShadowsocks2022(v *ShadowsocksServerConfig) (proto.Message, error) {
 			Email:   user.Email,
 			Address: user.Address.Build(),
 			Port:    uint32(user.Port),
+			// level 上游一直漏传（proto 里有字段、解析里没赋值），顺手补上：
+			// 不传的话 relay 用户永远吃 level 0 的 policy，页面上配的等级不生效。
+			Level:               int32(user.Level),
+			BandwidthBps:        user.BandwidthBps,
+			ConnLimit:           user.ConnLimit,
+			CommittedBps:        user.CommittedBps,
+			CommittedBurstBytes: user.CommittedBurstBytes,
 		})
 	}
 	return config, nil

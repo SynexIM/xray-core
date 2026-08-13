@@ -17,6 +17,7 @@ import (
 
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/protocol"
+	"github.com/xtls/xray-core/common/serial"
 	"github.com/xtls/xray-core/proxy/http"
 	hysteria "github.com/xtls/xray-core/proxy/hysteria"
 	shadowsocks "github.com/xtls/xray-core/proxy/shadowsocks"
@@ -52,6 +53,28 @@ func usersOf(t *testing.T, msg proto.Message) []*protocol.User {
 		return c.Users
 	case *shadowsocks2022.MultiUserServerConfig:
 		return c.Users
+	case *shadowsocks2022.RelayServerConfig:
+		// relay 模式没有 User 消息：每个 destination 自带 PSK，它**就是**一个用户。
+		// 这里借 RelayDestination.ToMemoryUser（线上 inbound_relay 用的同一段映射）
+		// 把它还原成 protocol.User，好让这张矩阵一视同仁地检查它。
+		// 走同一个函数是有意的：relay 那边漏搬一个字段，这张表就会红。
+		users := make([]*protocol.User, len(c.Destinations))
+		for i, d := range c.Destinations {
+			mu := d.ToMemoryUser()
+			users[i] = &protocol.User{
+				Email:               mu.Email,
+				Level:               mu.Level,
+				BandwidthBps:        mu.BandwidthBps,
+				ConnLimit:           mu.ConnLimit,
+				CommittedBps:        mu.CommittedBps,
+				CommittedBurstBytes: mu.CommittedBurstBytes,
+				// relay 的用户身份就是 PSK，本来不经过 protocol.User。补一个
+				// account 只是为了让下面 ToMemoryUser 那条断言跑得起来
+				// （它要求 account 非空），限速字段与它无关。
+				Account: serial.ToTypedMessage(&shadowsocks2022.Account{Key: d.Key}),
+			}
+		}
+		return users
 	case *hysteria.ServerConfig:
 		return c.Users
 	default:
@@ -105,6 +128,15 @@ var protocols = []struct {
 		name:       "shadowsocks-2022-多用户",
 		withLimits: `{"method":"2022-blake3-aes-128-gcm","password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","clients":[{"password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","email":"a@b","bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000}]}`,
 		without:    `{"method":"2022-blake3-aes-128-gcm","password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","clients":[{"password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","email":"a@b"}]}`,
+		build:      func(raw string) (proto.Message, error) { return buildInto(raw, new(conf.ShadowsocksServerConfig)) },
+	},
+	{
+		// ss2022 relay 又是另一条分支：用户带 address 时 buildShadowsocks2022
+		// 走 RelayServerConfig，用户变成 RelayDestination——那上面此前**一个限速
+		// 字段都没有**，走 relay 的客户设什么限速都被静默丢掉。
+		name:       "shadowsocks-2022-relay",
+		withLimits: `{"method":"2022-blake3-aes-128-gcm","password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","clients":[{"password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","email":"a@b","address":"127.0.0.1","port":1234,"bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000}]}`,
+		without:    `{"method":"2022-blake3-aes-128-gcm","password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","clients":[{"password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","email":"a@b","address":"127.0.0.1","port":1234}]}`,
 		build:      func(raw string) (proto.Message, error) { return buildInto(raw, new(conf.ShadowsocksServerConfig)) },
 	},
 	{

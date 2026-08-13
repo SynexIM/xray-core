@@ -168,14 +168,30 @@ func (x *MultiUserServerConfig) GetNetwork() []net.Network {
 }
 
 type RelayDestination struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	Address       *net.IPOrDomain        `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
-	Port          uint32                 `protobuf:"varint,3,opt,name=port,proto3" json:"port,omitempty"`
-	Email         string                 `protobuf:"bytes,4,opt,name=email,proto3" json:"email,omitempty"`
-	Level         int32                  `protobuf:"varint,5,opt,name=level,proto3" json:"level,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Key     string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Address *net.IPOrDomain        `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
+	Port    uint32                 `protobuf:"varint,3,opt,name=port,proto3" json:"port,omitempty"`
+	Email   string                 `protobuf:"bytes,4,opt,name=email,proto3" json:"email,omitempty"`
+	Level   int32                  `protobuf:"varint,5,opt,name=level,proto3" json:"level,omitempty"`
+	// Per-user runtime limits, same four fields as xray.common.protocol.User.
+	//
+	// Relay mode does not carry a User message: each destination is its own
+	// "user", identified by its own PSK. Without these fields the relay inbound
+	// had no way to express a limit at all — a customer on a relay line could set
+	// any bandwidth cap in the panel and every byte of it was silently dropped on
+	// the floor. Silent no-ops are exactly what this fork exists to prevent, so
+	// the fields live here and inbound_relay.go turns each destination into one
+	// long-lived *protocol.MemoryUser that the dispatcher shapes like any other.
+	//
+	// 0 means unlimited. See common/protocol/user.proto for the PIR/CIR/CBS
+	// semantics — they are identical, this is the same knob on another surface.
+	BandwidthBps        uint64 `protobuf:"varint,6,opt,name=bandwidth_bps,json=bandwidthBps,proto3" json:"bandwidth_bps,omitempty"`
+	ConnLimit           uint32 `protobuf:"varint,7,opt,name=conn_limit,json=connLimit,proto3" json:"conn_limit,omitempty"`
+	CommittedBps        uint64 `protobuf:"varint,8,opt,name=committed_bps,json=committedBps,proto3" json:"committed_bps,omitempty"`
+	CommittedBurstBytes uint64 `protobuf:"varint,9,opt,name=committed_burst_bytes,json=committedBurstBytes,proto3" json:"committed_burst_bytes,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *RelayDestination) Reset() {
@@ -239,6 +255,34 @@ func (x *RelayDestination) GetEmail() string {
 func (x *RelayDestination) GetLevel() int32 {
 	if x != nil {
 		return x.Level
+	}
+	return 0
+}
+
+func (x *RelayDestination) GetBandwidthBps() uint64 {
+	if x != nil {
+		return x.BandwidthBps
+	}
+	return 0
+}
+
+func (x *RelayDestination) GetConnLimit() uint32 {
+	if x != nil {
+		return x.ConnLimit
+	}
+	return 0
+}
+
+func (x *RelayDestination) GetCommittedBps() uint64 {
+	if x != nil {
+		return x.CommittedBps
+	}
+	return 0
+}
+
+func (x *RelayDestination) GetCommittedBurstBytes() uint64 {
+	if x != nil {
+		return x.CommittedBurstBytes
 	}
 	return 0
 }
@@ -438,13 +482,18 @@ const file_proxy_shadowsocks_2022_config_proto_rawDesc = "" +
 	"\x06method\x18\x01 \x01(\tR\x06method\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\tR\x03key\x120\n" +
 	"\x05users\x18\x03 \x03(\v2\x1a.xray.common.protocol.UserR\x05users\x122\n" +
-	"\anetwork\x18\x04 \x03(\x0e2\x18.xray.common.net.NetworkR\anetwork\"\x9b\x01\n" +
+	"\anetwork\x18\x04 \x03(\x0e2\x18.xray.common.net.NetworkR\anetwork\"\xb8\x02\n" +
 	"\x10RelayDestination\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x125\n" +
 	"\aaddress\x18\x02 \x01(\v2\x1b.xray.common.net.IPOrDomainR\aaddress\x12\x12\n" +
 	"\x04port\x18\x03 \x01(\rR\x04port\x12\x14\n" +
 	"\x05email\x18\x04 \x01(\tR\x05email\x12\x14\n" +
-	"\x05level\x18\x05 \x01(\x05R\x05level\"\xc4\x01\n" +
+	"\x05level\x18\x05 \x01(\x05R\x05level\x12#\n" +
+	"\rbandwidth_bps\x18\x06 \x01(\x04R\fbandwidthBps\x12\x1d\n" +
+	"\n" +
+	"conn_limit\x18\a \x01(\rR\tconnLimit\x12#\n" +
+	"\rcommitted_bps\x18\b \x01(\x04R\fcommittedBps\x122\n" +
+	"\x15committed_burst_bytes\x18\t \x01(\x04R\x13committedBurstBytes\"\xc4\x01\n" +
 	"\x11RelayServerConfig\x12\x16\n" +
 	"\x06method\x18\x01 \x01(\tR\x06method\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\tR\x03key\x12Q\n" +
