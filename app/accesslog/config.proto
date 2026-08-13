@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+// app.accesslog 是 ipipx 魔改：进程内有界访问聚合器（per-(email,domain,ip) 历史站点）。
+// 由 dispatcher 嗅探 hook 进程内喂入，经 app/accesslog/command 的 PullAccess gRPC 供 node-agent 拉取。
+package xray.app.accesslog;
+option csharp_namespace = "Xray.App.AccessLog";
+option go_package = "github.com/xtls/xray-core/app/accesslog";
+option java_package = "com.xray.app.accesslog";
+option java_multiple_files = true;
+
+// Config 是访问聚合器 app 配置。空值用默认（chan 4096 / 单 email 站点上限 2000）。
+message Config {
+  // chan_size：Collector 有界 channel 容量。满即丢弃事件并 dropped++。0=默认 4096。
+  int32 chan_size = 1;
+  // max_sites_per_email：单 email 窗口内不同 (domain,ip) 上限，溢出计入 dropped。0=默认 2000。
+  int32 max_sites_per_email = 2;
+}

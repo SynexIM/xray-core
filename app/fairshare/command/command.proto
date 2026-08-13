@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+// app.fairshare.command 是 ipipx 魔改：节点级公平限速配置的 gRPC 下发面。
+// node-agent 收到 NodeConfig（总带宽 + headroom）后调 SetNodeBandwidth 喂进程内调度器。
+package xray.app.fairshare.command;
+option csharp_namespace = "Xray.App.FairShare.Command";
+option go_package = "github.com/xtls/xray-core/app/fairshare/command";
+option java_package = "com.xray.app.fairshare.command";
+option java_multiple_files = true;
+
+service FairShareService {
+  // SetNodeBandwidth 设置节点总出口上限（avail_bps，已含 headroom 折算）。0=关闭节点级公平。
+  rpc SetNodeBandwidth(SetNodeBandwidthRequest) returns (SetNodeBandwidthResponse) {}
+}
+
+message SetNodeBandwidthRequest {
+  uint64 avail_bps = 1; // 节点总出口上限（字节/秒）= total_bandwidth_bps × headroom_pct/100
+  uint64 soft_floor_bps = 2; // 公平软地板（字节/秒）；0=默认 62500（0.5Mbps）。拥挤时每活跃用户的软保证。
+  uint64 hard_floor_bps = 3; // 绝对硬地板（字节/秒）；0=默认 16384（16KB/s）。任何情况下不掐到该值以下。
+}
+
+message SetNodeBandwidthResponse {}
+
+// Config 命令服务配置（gRPC server 经 RegisterConfig 实例化本服务）。
+message Config {}

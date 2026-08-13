@@ -1,0 +1,158 @@
+syntax = "proto3";
+
+package xray.app.proxyman.command;
+option csharp_namespace = "Xray.App.Proxyman.Command";
+option go_package = "github.com/xtls/xray-core/app/proxyman/command";
+option java_package = "com.xray.app.proxyman.command";
+option java_multiple_files = true;
+
+import "common/protocol/user.proto";
+import "common/serial/typed_message.proto";
+import "core/config.proto";
+
+message AddUserOperation {
+  xray.common.protocol.User user = 1;
+}
+
+message RemoveUserOperation {
+  string email = 1;
+}
+
+// UpdateUserOperation updates an existing user in place, keyed by email. It is
+// used to mutate per-user runtime limits (bandwidth_bps / conn_limit) and the
+// protocol account/credential without the remove+add churn that drops live
+// connections. Inbounds whose UserManager implements UpdateUser apply it
+// atomically; the email is the identity and must already exist.
+message UpdateUserOperation {
+  xray.common.protocol.User user = 1;
+}
+
+message AddInboundRequest {
+  core.InboundHandlerConfig inbound = 1;
+}
+
+message AddInboundResponse {}
+
+message RemoveInboundRequest {
+  string tag = 1;
+}
+
+message RemoveInboundResponse {}
+
+message DrainInboundRequest {
+  string tag = 1;
+}
+
+message DrainInboundResponse {}
+
+message ResumeInboundRequest {
+  string tag = 1;
+}
+
+message ResumeInboundResponse {}
+
+message AlterInboundRequest {
+  string tag = 1;
+  xray.common.serial.TypedMessage operation = 2;
+}
+
+message AlterInboundResponse {}
+
+// BatchAlterInbound applies many AlterInbound operations against one inbound
+// tag over a single gRPC call, so client provisioning churn scales with node
+// requests instead of per-client round trips. Operations are applied in order;
+// per-operation failures are reported in the response rather than aborting the
+// whole batch, so the caller can retry only the failed slots.
+message BatchAlterInboundRequest {
+  string tag = 1;
+  repeated xray.common.serial.TypedMessage operations = 2;
+}
+
+message BatchAlterInboundOperationResult {
+  // index is the position of the operation in the request operations list.
+  uint32 index = 1;
+  bool success = 2;
+  string error = 3;
+}
+
+message BatchAlterInboundResponse {
+  repeated BatchAlterInboundOperationResult results = 1;
+}
+
+message ListInboundsRequest {
+  bool isOnlyTags = 1;
+}
+
+message ListInboundsResponse {
+  repeated core.InboundHandlerConfig inbounds = 1;
+}
+
+message GetInboundUserRequest {
+  string tag = 1;
+  string email = 2;
+}
+
+message GetInboundUserResponse {
+  repeated xray.common.protocol.User users = 1;
+}
+
+message GetInboundUsersCountResponse {
+  int64 count = 1;
+}
+
+message AddOutboundRequest {
+  core.OutboundHandlerConfig outbound = 1;
+}
+
+message AddOutboundResponse {}
+
+message RemoveOutboundRequest {
+  string tag = 1;
+}
+
+message RemoveOutboundResponse {}
+
+message AlterOutboundRequest {
+  string tag = 1;
+  xray.common.serial.TypedMessage operation = 2;
+}
+
+message AlterOutboundResponse {}
+
+message ListOutboundsRequest {}
+
+message ListOutboundsResponse {
+  repeated core.OutboundHandlerConfig outbounds = 1;
+}
+
+service HandlerService {
+  rpc AddInbound(AddInboundRequest) returns (AddInboundResponse) {}
+
+  rpc RemoveInbound(RemoveInboundRequest) returns (RemoveInboundResponse) {}
+
+  // DrainInbound closes only the listening socket. Established TCP sessions
+  // keep their handler/proxy state until the old process exits after a drain TTL.
+  rpc DrainInbound(DrainInboundRequest) returns (DrainInboundResponse) {}
+
+  rpc ResumeInbound(ResumeInboundRequest) returns (ResumeInboundResponse) {}
+
+  rpc AlterInbound(AlterInboundRequest) returns (AlterInboundResponse) {}
+
+  rpc BatchAlterInbound(BatchAlterInboundRequest) returns (BatchAlterInboundResponse) {}
+
+  rpc ListInbounds(ListInboundsRequest) returns (ListInboundsResponse) {}
+
+  rpc GetInboundUsers(GetInboundUserRequest) returns (GetInboundUserResponse) {}
+
+  rpc GetInboundUsersCount(GetInboundUserRequest) returns (GetInboundUsersCountResponse) {}
+
+  rpc AddOutbound(AddOutboundRequest) returns (AddOutboundResponse) {}
+
+  rpc RemoveOutbound(RemoveOutboundRequest) returns (RemoveOutboundResponse) {}
+
+  rpc AlterOutbound(AlterOutboundRequest) returns (AlterOutboundResponse) {}
+
+  rpc ListOutbounds(ListOutboundsRequest) returns (ListOutboundsResponse) {}
+}
+
+message Config {}
