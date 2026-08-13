@@ -46,6 +46,12 @@ func NewBridge(config *BridgeConfig, dispatcher routing.Dispatcher) (*Bridge, er
 	return b, nil
 }
 
+// Tag 是这个 bridge 的入站标签，热改时按它定位。
+func (b *Bridge) Tag() string { return b.tag }
+
+// Domain 是它监听的内部域名。
+func (b *Bridge) Domain() string { return b.domain }
+
 func (b *Bridge) cleanup() {
 	var activeWorkers []*BridgeWorker
 

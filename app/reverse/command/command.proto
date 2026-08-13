@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+// app.reverse.command 是 ipipx 魔改：reverse（内网穿透的 bridge/portal）的
+// gRPC 热改面。
+//
+// 为什么需要它：控制面给客户换入口是常规操作。如果每次都要重启 xray 进程，
+// 那台节点上**所有**客户的连接会一起断——一个客户改配置，全节点陪着断线。
+// 热改是产品要求，不是优化。
+package xray.app.reverse.command;
+option csharp_namespace = "Xray.App.Reverse.Command";
+option go_package = "github.com/xtls/xray-core/app/reverse/command";
+option java_package = "com.xray.app.reverse.command";
+option java_multiple_files = true;
+
+import "app/reverse/config.proto";
+
+service ReverseService {
+  // AddBridge 热加一个 bridge。tag 已存在时报错，不静默覆盖。
+  rpc AddBridge(AddBridgeRequest) returns (AddBridgeResponse) {}
+  // RemoveBridge 停掉一个 bridge：它不再建新的 worker，存量连接自然收敛。
+  rpc RemoveBridge(RemoveBridgeRequest) returns (RemoveBridgeResponse) {}
+  // AddPortal 热加一个 portal，并把它注册进 outbound manager。
+  rpc AddPortal(AddPortalRequest) returns (AddPortalResponse) {}
+  // RemovePortal 摘掉一个 portal，连同它的 outbound handler。
+  rpc RemovePortal(RemovePortalRequest) returns (RemovePortalResponse) {}
+  // ListReverse 返回当前**运行中**的 bridge/portal，控制面靠它确认改动生效了。
+  rpc ListReverse(ListReverseRequest) returns (ListReverseResponse) {}
+}
+
+message AddBridgeRequest {
+  xray.app.reverse.BridgeConfig bridge = 1;
+}
+
+message AddBridgeResponse {}
+
+message RemoveBridgeRequest {
+  string tag = 1;
+}
+
+message RemoveBridgeResponse {}
+
+message AddPortalRequest {
+  xray.app.reverse.PortalConfig portal = 1;
+}
+
+message AddPortalResponse {}
+
+message RemovePortalRequest {
+  string tag = 1;
+}
+
+message RemovePortalResponse {}
+
+message ListReverseRequest {}
+
+message ListReverseResponse {
+  repeated xray.app.reverse.BridgeConfig bridges = 1;
+  repeated xray.app.reverse.PortalConfig portals = 2;
+}
+
+// Config 命令服务配置（gRPC server 经 RegisterConfig 实例化本服务）。
+message Config {}

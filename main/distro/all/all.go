@@ -18,6 +18,7 @@ import (
 	_ "github.com/xtls/xray-core/app/accesslog"
 	_ "github.com/xtls/xray-core/app/accesslog/command"
 	_ "github.com/xtls/xray-core/app/fairshare/command"
+	_ "github.com/xtls/xray-core/app/reverse/command"
 
 	// Developer preview services
 	_ "github.com/xtls/xray-core/app/observatory/command"
