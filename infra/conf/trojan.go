@@ -108,6 +108,10 @@ type TrojanUserConfig struct {
 	Level    byte   `json:"level"`
 	Email    string `json:"email"`
 	Flow     string `json:"flow"`
+	// 每用户限速。留空 = 不限。单位 bit/s，与 protocol.User 的顶层字段同名，
+	// 所以所有协议的配置写法完全一致。
+	BandwidthBps uint64 `json:"bandwidth_bps"`
+	ConnLimit    uint32 `json:"conn_limit"`
 }
 
 // TrojanServerConfig is Inbound configuration
@@ -141,6 +145,8 @@ func (c *TrojanServerConfig) Build() (proto.Message, error) {
 			Account: serial.ToTypedMessage(&trojan.Account{
 				Password: rawUser.Password,
 			}),
+			BandwidthBps: rawUser.BandwidthBps,
+			ConnLimit:    rawUser.ConnLimit,
 		}
 		return nil
 	}

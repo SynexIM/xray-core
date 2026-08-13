@@ -181,7 +181,13 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, destination net.Destina
 		user = sessionInbound.User
 	}
 
-	if user != nil && len(user.Email) > 0 {
+	// 限速与公平只看用户本身，不看它有没有 email。
+	//
+	// 限速器是按 *MemoryUser 指针索引的（见 RuntimeRateLimiter），跟 email 毫无关系。
+	// 早先把这段和下面的 stats 一起放在 `len(user.Email) > 0` 里，
+	// 效果是**没有 email 的用户永远限不上速，也逃掉节点级公平**——
+	// 拥挤时他们会挤压守规矩的用户。stats 那部分才真的需要 email（计数器名里有它）。
+	if user != nil {
 		if limiter, _ := user.RuntimeRateLimiter(buf.NewRateLimiter); limiter != nil {
 			// getLink 的两条管道是分开的（不是 WrapLink 那种单条双向 link）：
 			//   downlink 管道 = inboundLink.Reader (读) / outboundLink.Writer (写)
@@ -204,6 +210,10 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, destination net.Destina
 			outboundLink.Reader = buf.NewFairLimitReader(ctx, outboundLink.Reader, up, onBytes) // uplink ← up
 			context.AfterFunc(ctx, release)
 		}
+	}
+
+	// 统计要按 email 归集，所以这一段确实需要它。
+	if user != nil && len(user.Email) > 0 {
 		p := d.policy.ForLevel(user.Level)
 		if p.Stats.UserUplink {
 			name := "user>>>" + user.Email + ">>>traffic>>>uplink"
@@ -271,17 +281,22 @@ func WrapLink(ctx context.Context, policyManager policy.Manager, statsManager st
 	timeoutReader := &buf.TimeoutWrapperReader{Reader: link.Reader}
 	link.Reader = timeoutReader
 
-	if user != nil && len(user.Email) > 0 {
+	// 同上：限速与公平只看用户本身，有没有 email 与它无关。
+	if user != nil {
 		if limiter, _ := user.RuntimeRateLimiter(buf.NewRateLimiter); limiter != nil {
 			link.Reader = buf.NewRateLimitReaderWithLimiter(ctx, link.Reader, limiter)
 			link.Writer = buf.NewRateLimitWriterWithLimiter(ctx, link.Writer, limiter)
 		}
-		// 节点级公平限速（ipipx 魔改）：套在 per-user 桶之外，双向整形使「节点总出口」生效。
+		// 节点级公平限速：套在 per-user 桶之外，双向整形使「节点总出口」生效。
 		if up, down, onBytes, release := protocol.FairScheduler().Acquire(user); up != nil {
 			link.Reader = buf.NewFairLimitReader(ctx, link.Reader, up, onBytes)
 			link.Writer = buf.NewFairLimitWriter(ctx, link.Writer, down, onBytes)
 			context.AfterFunc(ctx, release)
 		}
+	}
+
+	// 统计要按 email 归集，所以这一段确实需要它。
+	if user != nil && len(user.Email) > 0 {
 		p := policyManager.ForLevel(user.Level)
 		if p.Stats.UserUplink {
 			name := "user>>>" + user.Email + ">>>traffic>>>uplink"

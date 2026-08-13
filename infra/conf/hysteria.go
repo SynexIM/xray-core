@@ -34,6 +34,10 @@ type HysteriaUserConfig struct {
 	Auth  string `json:"auth"`
 	Level uint32 `json:"level"`
 	Email string `json:"email"`
+	// 每用户限速。留空 = 不限。单位是 bit/s，与 protocol.User 的顶层字段同名，
+	// 所以所有协议的配置写法完全一致。
+	BandwidthBps uint64 `json:"bandwidth_bps"`
+	ConnLimit    uint32 `json:"conn_limit"`
 }
 
 type HysteriaServerConfig struct {
@@ -60,9 +64,11 @@ func (c *HysteriaServerConfig) Build() (proto.Message, error) {
 				Auth: user.Auth,
 			}
 			config.Users[idx] = &protocol.User{
-				Email:   user.Email,
-				Level:   user.Level,
-				Account: serial.ToTypedMessage(acc),
+				Email:        user.Email,
+				Level:        user.Level,
+				Account:      serial.ToTypedMessage(acc),
+				BandwidthBps: user.BandwidthBps,
+				ConnLimit:    user.ConnLimit,
 			}
 			return nil
 		}

@@ -36,6 +36,10 @@ type ShadowsocksUserConfig struct {
 	Email    string   `json:"email"`
 	Address  *Address `json:"address"`
 	Port     uint16   `json:"port"`
+	// 每用户限速。留空 = 不限。单位 bit/s，与 protocol.User 的顶层字段同名，
+	// 所以所有协议的配置写法完全一致。
+	BandwidthBps uint64 `json:"bandwidth_bps"`
+	ConnLimit    uint32 `json:"conn_limit"`
 }
 
 type ShadowsocksServerConfig struct {
@@ -46,6 +50,10 @@ type ShadowsocksServerConfig struct {
 	Users       []*ShadowsocksUserConfig `json:"users"`
 	Clients     []*ShadowsocksUserConfig `json:"clients"`
 	NetworkList *NetworkList             `json:"network"`
+	// 每用户限速。留空 = 不限。单位 bit/s，与 protocol.User 的顶层字段同名，
+	// 所以所有协议的配置写法完全一致。
+	BandwidthBps uint64 `json:"bandwidth_bps"`
+	ConnLimit    uint32 `json:"conn_limit"`
 }
 
 func (v *ShadowsocksServerConfig) Build() (proto.Message, error) {
@@ -79,9 +87,11 @@ func (v *ShadowsocksServerConfig) Build() (proto.Message, error) {
 					return errors.New("unsupported cipher method: ", user.Cipher)
 				}
 				config.Users[idx] = &protocol.User{
-					Email:   user.Email,
-					Level:   uint32(user.Level),
-					Account: serial.ToTypedMessage(account),
+					Email:        user.Email,
+					Level:        uint32(user.Level),
+					Account:      serial.ToTypedMessage(account),
+					BandwidthBps: user.BandwidthBps,
+					ConnLimit:    user.ConnLimit,
 				}
 				return nil
 			}
@@ -101,9 +111,11 @@ func (v *ShadowsocksServerConfig) Build() (proto.Message, error) {
 			return nil, errors.New("unknown cipher method: ", v.Cipher)
 		}
 		config.Users = append(config.Users, &protocol.User{
-			Email:   v.Email,
-			Level:   uint32(v.Level),
-			Account: serial.ToTypedMessage(account),
+			Email:        v.Email,
+			Level:        uint32(v.Level),
+			Account:      serial.ToTypedMessage(account),
+			BandwidthBps: v.BandwidthBps,
+			ConnLimit:    v.ConnLimit,
 		})
 	}
 
@@ -143,9 +155,11 @@ func buildShadowsocks2022(v *ShadowsocksServerConfig) (proto.Message, error) {
 				Key: user.Password,
 			}
 			config.Users[idx] = &protocol.User{
-				Email:   user.Email,
-				Level:   uint32(user.Level),
-				Account: serial.ToTypedMessage(account),
+				Email:        user.Email,
+				Level:        uint32(user.Level),
+				Account:      serial.ToTypedMessage(account),
+				BandwidthBps: user.BandwidthBps,
+				ConnLimit:    user.ConnLimit,
 			}
 			return nil
 		}
