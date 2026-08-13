@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/apernet/quic-go v0.59.1-0.20260425001925-6c6cc9bcb716
-	github.com/cloudflare/circl v1.6.4
+	github.com/cloudflare/circl v1.6.5
 	github.com/ghodss/yaml v1.0.1-0.20220118164431-d8423dcdf344
 	github.com/golang/mock v1.7.0-rc.1
 	github.com/google/go-cmp v0.7.0
@@ -28,6 +28,7 @@ require (
 	golang.org/x/net v0.57.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0
+	golang.org/x/time v0.14.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb
 	golang.zx2c4.com/wireguard/windows v1.0.1
@@ -54,7 +55,6 @@ require (
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
-	golang.org/x/time v0.14.0 // indirect
 	golang.org/x/tools v0.47.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
