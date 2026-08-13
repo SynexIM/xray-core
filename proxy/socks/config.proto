@@ -23,6 +23,17 @@ enum AuthType {
   PASSWORD = 1;
 }
 
+// UserAccount carries one boot-time user with protocol-agnostic per-user runtime
+// limits, so a mixed/socks inbound enforces bandwidth + connection caps for users
+// baked in at startup (the runtime AddUser path carries the same limits on the
+// top-level protocol.User). 0 means unlimited.
+message UserAccount {
+  string username = 1;
+  string password = 2;
+  uint64 bandwidth_bps = 3;
+  uint32 conn_limit = 4;
+}
+
 // ServerConfig is the protobuf config for Socks server.
 message ServerConfig {
   AuthType auth_type = 1;
@@ -30,6 +41,9 @@ message ServerConfig {
   xray.common.net.IPOrDomain address = 3;
   bool udp_enabled = 4;
   uint32 user_level = 6;
+  // Per-user accounts with limits. Preferred over `accounts` (which has no
+  // limit fields); both are merged at startup into the in-memory user store.
+  repeated UserAccount user_accounts = 7;
 }
 
 // ClientConfig is the protobuf config for Socks client.

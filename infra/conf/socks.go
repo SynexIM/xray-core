@@ -11,8 +11,10 @@ import (
 )
 
 type SocksAccount struct {
-	Username string `json:"user"`
-	Password string `json:"pass"`
+	Username     string `json:"user"`
+	Password     string `json:"pass"`
+	BandwidthBps uint64 `json:"bandwidth_bps"`
+	ConnLimit    uint32 `json:"conn_limit"`
 }
 
 func (v *SocksAccount) Build() *socks.Account {
@@ -51,11 +53,19 @@ func (v *SocksServerConfig) Build() (proto.Message, error) {
 	if v.Accounts != nil {
 		v.Users = v.Accounts
 	}
-	// TODO: PB
+	// Build per-user accounts carrying protocol-agnostic limits (bandwidth +
+	// connection caps), so a mixed/socks inbound enforces them for users baked in
+	// at boot. The legacy `accounts` map (no limits) is left empty to avoid
+	// double-registering the same usernames in the runtime user store.
 	if len(v.Users) > 0 {
-		config.Accounts = make(map[string]string, len(v.Users))
+		config.UserAccounts = make([]*socks.UserAccount, 0, len(v.Users))
 		for _, account := range v.Users {
-			config.Accounts[account.Username] = account.Password
+			config.UserAccounts = append(config.UserAccounts, &socks.UserAccount{
+				Username:     account.Username,
+				Password:     account.Password,
+				BandwidthBps: account.BandwidthBps,
+				ConnLimit:    account.ConnLimit,
+			})
 		}
 	}
 

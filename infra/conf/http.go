@@ -11,8 +11,10 @@ import (
 )
 
 type HTTPAccount struct {
-	Username string `json:"user"`
-	Password string `json:"pass"`
+	Username     string `json:"user"`
+	Password     string `json:"pass"`
+	BandwidthBps uint64 `json:"bandwidth_bps"`
+	ConnLimit    uint32 `json:"conn_limit"`
 }
 
 func (v *HTTPAccount) Build() *http.Account {
@@ -38,11 +40,18 @@ func (c *HTTPServerConfig) Build() (proto.Message, error) {
 	if c.Accounts != nil {
 		c.Users = c.Accounts
 	}
-	// TODO: PB
+	// Per-user accounts carry protocol-agnostic limits (bandwidth + connection
+	// caps); the legacy `accounts` map (no limits) is left empty to avoid
+	// double-registering usernames in the runtime user store.
 	if len(c.Users) > 0 {
-		config.Accounts = make(map[string]string)
+		config.UserAccounts = make([]*http.UserAccount, 0, len(c.Users))
 		for _, account := range c.Users {
-			config.Accounts[account.Username] = account.Password
+			config.UserAccounts = append(config.UserAccounts, &http.UserAccount{
+				Username:     account.Username,
+				Password:     account.Password,
+				BandwidthBps: account.BandwidthBps,
+				ConnLimit:    account.ConnLimit,
+			})
 		}
 	}
 

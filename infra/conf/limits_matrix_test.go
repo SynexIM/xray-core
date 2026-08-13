@@ -17,8 +17,10 @@ import (
 
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/protocol"
+	"github.com/xtls/xray-core/proxy/http"
 	hysteria "github.com/xtls/xray-core/proxy/hysteria"
 	shadowsocks "github.com/xtls/xray-core/proxy/shadowsocks"
+	"github.com/xtls/xray-core/proxy/socks"
 	shadowsocks2022 "github.com/xtls/xray-core/proxy/shadowsocks_2022"
 	trojan "github.com/xtls/xray-core/proxy/trojan"
 	vlessinbound "github.com/xtls/xray-core/proxy/vless/inbound"
@@ -205,6 +207,78 @@ func TestNoLimitsMeansNoLimiter(t *testing.T) {
 			}
 			if limiter, _ := mu.RuntimeRateLimiter(buf.NewRateLimiter); limiter != nil {
 				t.Error("没设限速却建了限流器")
+			}
+		})
+	}
+}
+
+// socks 与 http 是**静态入站**：用户在配置里定义，不走运行时 AddUser，
+// 也没有 protocol.User 那条路径。它们把用户放进 UserAccount，
+// 启动时汇进一个共享的 UserStore（mixed 入站的 socks 与 http 两面看到的是同一批用户）。
+//
+// 所以它们的限速要单独测——上面那张矩阵检查不到这条路径。
+func TestStaticInboundsReadLimits(t *testing.T) {
+	cases := []struct {
+		name    string
+		with    string
+		without string
+		build   func(raw string) (proto.Message, error)
+		accs    func(proto.Message) []struct{ Bps uint64; Conn uint32 }
+	}{
+		{
+			name:    "socks",
+			with:    `{"auth":"password","accounts":[{"user":"u","pass":"p","bandwidth_bps":12500000,"conn_limit":8}]}`,
+			without: `{"auth":"password","accounts":[{"user":"u","pass":"p"}]}`,
+			build:   func(raw string) (proto.Message, error) { return buildInto(raw, new(conf.SocksServerConfig)) },
+			accs: func(m proto.Message) []struct{ Bps uint64; Conn uint32 } {
+				out := []struct{ Bps uint64; Conn uint32 }{}
+				for _, a := range m.(*socks.ServerConfig).UserAccounts {
+					out = append(out, struct{ Bps uint64; Conn uint32 }{a.BandwidthBps, a.ConnLimit})
+				}
+				return out
+			},
+		},
+		{
+			name:    "http",
+			with:    `{"accounts":[{"user":"u","pass":"p","bandwidth_bps":12500000,"conn_limit":8}]}`,
+			without: `{"accounts":[{"user":"u","pass":"p"}]}`,
+			build:   func(raw string) (proto.Message, error) { return buildInto(raw, new(conf.HTTPServerConfig)) },
+			accs: func(m proto.Message) []struct{ Bps uint64; Conn uint32 } {
+				out := []struct{ Bps uint64; Conn uint32 }{}
+				for _, a := range m.(*http.ServerConfig).UserAccounts {
+					out = append(out, struct{ Bps uint64; Conn uint32 }{a.BandwidthBps, a.ConnLimit})
+				}
+				return out
+			},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name+"/设了就限住", func(t *testing.T) {
+			msg, err := c.build(c.with)
+			if err != nil {
+				t.Fatalf("Build 失败：%v", err)
+			}
+			accs := c.accs(msg)
+			if len(accs) == 0 {
+				t.Fatal("没解析出任何账号")
+			}
+			if accs[0].Bps != wantBps || accs[0].Conn != wantConn {
+				t.Errorf("限速被丢弃了：bandwidth=%d conn=%d", accs[0].Bps, accs[0].Conn)
+			}
+		})
+
+		t.Run(c.name+"/不设就是不限", func(t *testing.T) {
+			msg, err := c.build(c.without)
+			if err != nil {
+				t.Fatalf("Build 失败：%v", err)
+			}
+			accs := c.accs(msg)
+			if len(accs) == 0 {
+				t.Fatal("没解析出任何账号")
+			}
+			if accs[0].Bps != 0 || accs[0].Conn != 0 {
+				t.Errorf("没写限速却冒出值：bandwidth=%d conn=%d", accs[0].Bps, accs[0].Conn)
 			}
 		})
 	}

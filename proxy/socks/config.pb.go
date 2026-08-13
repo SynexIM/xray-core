@@ -125,21 +125,96 @@ func (x *Account) GetPassword() string {
 	return ""
 }
 
+// UserAccount carries one boot-time user with protocol-agnostic per-user runtime
+// limits, so a mixed/socks inbound enforces bandwidth + connection caps for users
+// baked in at startup (the runtime AddUser path carries the same limits on the
+// top-level protocol.User). 0 means unlimited.
+type UserAccount struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
+	Password      string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
+	BandwidthBps  uint64                 `protobuf:"varint,3,opt,name=bandwidth_bps,json=bandwidthBps,proto3" json:"bandwidth_bps,omitempty"`
+	ConnLimit     uint32                 `protobuf:"varint,4,opt,name=conn_limit,json=connLimit,proto3" json:"conn_limit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UserAccount) Reset() {
+	*x = UserAccount{}
+	mi := &file_proxy_socks_config_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UserAccount) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UserAccount) ProtoMessage() {}
+
+func (x *UserAccount) ProtoReflect() protoreflect.Message {
+	mi := &file_proxy_socks_config_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UserAccount.ProtoReflect.Descriptor instead.
+func (*UserAccount) Descriptor() ([]byte, []int) {
+	return file_proxy_socks_config_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *UserAccount) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
+func (x *UserAccount) GetPassword() string {
+	if x != nil {
+		return x.Password
+	}
+	return ""
+}
+
+func (x *UserAccount) GetBandwidthBps() uint64 {
+	if x != nil {
+		return x.BandwidthBps
+	}
+	return 0
+}
+
+func (x *UserAccount) GetConnLimit() uint32 {
+	if x != nil {
+		return x.ConnLimit
+	}
+	return 0
+}
+
 // ServerConfig is the protobuf config for Socks server.
 type ServerConfig struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AuthType      AuthType               `protobuf:"varint,1,opt,name=auth_type,json=authType,proto3,enum=xray.proxy.socks.AuthType" json:"auth_type,omitempty"`
-	Accounts      map[string]string      `protobuf:"bytes,2,rep,name=accounts,proto3" json:"accounts,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Address       *net.IPOrDomain        `protobuf:"bytes,3,opt,name=address,proto3" json:"address,omitempty"`
-	UdpEnabled    bool                   `protobuf:"varint,4,opt,name=udp_enabled,json=udpEnabled,proto3" json:"udp_enabled,omitempty"`
-	UserLevel     uint32                 `protobuf:"varint,6,opt,name=user_level,json=userLevel,proto3" json:"user_level,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	AuthType   AuthType               `protobuf:"varint,1,opt,name=auth_type,json=authType,proto3,enum=xray.proxy.socks.AuthType" json:"auth_type,omitempty"`
+	Accounts   map[string]string      `protobuf:"bytes,2,rep,name=accounts,proto3" json:"accounts,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Address    *net.IPOrDomain        `protobuf:"bytes,3,opt,name=address,proto3" json:"address,omitempty"`
+	UdpEnabled bool                   `protobuf:"varint,4,opt,name=udp_enabled,json=udpEnabled,proto3" json:"udp_enabled,omitempty"`
+	UserLevel  uint32                 `protobuf:"varint,6,opt,name=user_level,json=userLevel,proto3" json:"user_level,omitempty"`
+	// Per-user accounts with limits. Preferred over `accounts` (which has no
+	// limit fields); both are merged at startup into the in-memory user store.
+	UserAccounts  []*UserAccount `protobuf:"bytes,7,rep,name=user_accounts,json=userAccounts,proto3" json:"user_accounts,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ServerConfig) Reset() {
 	*x = ServerConfig{}
-	mi := &file_proxy_socks_config_proto_msgTypes[1]
+	mi := &file_proxy_socks_config_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -151,7 +226,7 @@ func (x *ServerConfig) String() string {
 func (*ServerConfig) ProtoMessage() {}
 
 func (x *ServerConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_socks_config_proto_msgTypes[1]
+	mi := &file_proxy_socks_config_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -164,7 +239,7 @@ func (x *ServerConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerConfig.ProtoReflect.Descriptor instead.
 func (*ServerConfig) Descriptor() ([]byte, []int) {
-	return file_proxy_socks_config_proto_rawDescGZIP(), []int{1}
+	return file_proxy_socks_config_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ServerConfig) GetAuthType() AuthType {
@@ -202,6 +277,13 @@ func (x *ServerConfig) GetUserLevel() uint32 {
 	return 0
 }
 
+func (x *ServerConfig) GetUserAccounts() []*UserAccount {
+	if x != nil {
+		return x.UserAccounts
+	}
+	return nil
+}
+
 // ClientConfig is the protobuf config for Socks client.
 type ClientConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -213,7 +295,7 @@ type ClientConfig struct {
 
 func (x *ClientConfig) Reset() {
 	*x = ClientConfig{}
-	mi := &file_proxy_socks_config_proto_msgTypes[2]
+	mi := &file_proxy_socks_config_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -225,7 +307,7 @@ func (x *ClientConfig) String() string {
 func (*ClientConfig) ProtoMessage() {}
 
 func (x *ClientConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_socks_config_proto_msgTypes[2]
+	mi := &file_proxy_socks_config_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -238,7 +320,7 @@ func (x *ClientConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientConfig.ProtoReflect.Descriptor instead.
 func (*ClientConfig) Descriptor() ([]byte, []int) {
-	return file_proxy_socks_config_proto_rawDescGZIP(), []int{2}
+	return file_proxy_socks_config_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ClientConfig) GetServer() *protocol.ServerEndpoint {
@@ -255,7 +337,13 @@ const file_proxy_socks_config_proto_rawDesc = "" +
 	"\x18proxy/socks/config.proto\x12\x10xray.proxy.socks\x1a\x18common/net/address.proto\x1a!common/protocol/server_spec.proto\"A\n" +
 	"\aAccount\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
-	"\bpassword\x18\x02 \x01(\tR\bpassword\"\xc5\x02\n" +
+	"\bpassword\x18\x02 \x01(\tR\bpassword\"\x89\x01\n" +
+	"\vUserAccount\x12\x1a\n" +
+	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
+	"\bpassword\x18\x02 \x01(\tR\bpassword\x12#\n" +
+	"\rbandwidth_bps\x18\x03 \x01(\x04R\fbandwidthBps\x12\x1d\n" +
+	"\n" +
+	"conn_limit\x18\x04 \x01(\rR\tconnLimit\"\x89\x03\n" +
 	"\fServerConfig\x127\n" +
 	"\tauth_type\x18\x01 \x01(\x0e2\x1a.xray.proxy.socks.AuthTypeR\bauthType\x12H\n" +
 	"\baccounts\x18\x02 \x03(\v2,.xray.proxy.socks.ServerConfig.AccountsEntryR\baccounts\x125\n" +
@@ -263,7 +351,8 @@ const file_proxy_socks_config_proto_rawDesc = "" +
 	"\vudp_enabled\x18\x04 \x01(\bR\n" +
 	"udpEnabled\x12\x1d\n" +
 	"\n" +
-	"user_level\x18\x06 \x01(\rR\tuserLevel\x1a;\n" +
+	"user_level\x18\x06 \x01(\rR\tuserLevel\x12B\n" +
+	"\ruser_accounts\x18\a \x03(\v2\x1d.xray.proxy.socks.UserAccountR\fuserAccounts\x1a;\n" +
 	"\rAccountsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"L\n" +
@@ -287,26 +376,28 @@ func file_proxy_socks_config_proto_rawDescGZIP() []byte {
 }
 
 var file_proxy_socks_config_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proxy_socks_config_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_proxy_socks_config_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_proxy_socks_config_proto_goTypes = []any{
 	(AuthType)(0),                   // 0: xray.proxy.socks.AuthType
 	(*Account)(nil),                 // 1: xray.proxy.socks.Account
-	(*ServerConfig)(nil),            // 2: xray.proxy.socks.ServerConfig
-	(*ClientConfig)(nil),            // 3: xray.proxy.socks.ClientConfig
-	nil,                             // 4: xray.proxy.socks.ServerConfig.AccountsEntry
-	(*net.IPOrDomain)(nil),          // 5: xray.common.net.IPOrDomain
-	(*protocol.ServerEndpoint)(nil), // 6: xray.common.protocol.ServerEndpoint
+	(*UserAccount)(nil),             // 2: xray.proxy.socks.UserAccount
+	(*ServerConfig)(nil),            // 3: xray.proxy.socks.ServerConfig
+	(*ClientConfig)(nil),            // 4: xray.proxy.socks.ClientConfig
+	nil,                             // 5: xray.proxy.socks.ServerConfig.AccountsEntry
+	(*net.IPOrDomain)(nil),          // 6: xray.common.net.IPOrDomain
+	(*protocol.ServerEndpoint)(nil), // 7: xray.common.protocol.ServerEndpoint
 }
 var file_proxy_socks_config_proto_depIdxs = []int32{
 	0, // 0: xray.proxy.socks.ServerConfig.auth_type:type_name -> xray.proxy.socks.AuthType
-	4, // 1: xray.proxy.socks.ServerConfig.accounts:type_name -> xray.proxy.socks.ServerConfig.AccountsEntry
-	5, // 2: xray.proxy.socks.ServerConfig.address:type_name -> xray.common.net.IPOrDomain
-	6, // 3: xray.proxy.socks.ClientConfig.server:type_name -> xray.common.protocol.ServerEndpoint
-	4, // [4:4] is the sub-list for method output_type
-	4, // [4:4] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	5, // 1: xray.proxy.socks.ServerConfig.accounts:type_name -> xray.proxy.socks.ServerConfig.AccountsEntry
+	6, // 2: xray.proxy.socks.ServerConfig.address:type_name -> xray.common.net.IPOrDomain
+	2, // 3: xray.proxy.socks.ServerConfig.user_accounts:type_name -> xray.proxy.socks.UserAccount
+	7, // 4: xray.proxy.socks.ClientConfig.server:type_name -> xray.common.protocol.ServerEndpoint
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_proxy_socks_config_proto_init() }
@@ -320,7 +411,7 @@ func file_proxy_socks_config_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proxy_socks_config_proto_rawDesc), len(file_proxy_socks_config_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   4,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
