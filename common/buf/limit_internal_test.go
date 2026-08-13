@@ -23,7 +23,7 @@ func TestRateLimitBurstWindow(t *testing.T) {
 // total > burst 时分片循环取令牌，不报错不丢字节。
 func TestRateLimitWaitNChunksAboveBurst(t *testing.T) {
 	limiter := rate.NewLimiter(rate.Limit(1_000_000_000), Size)
-	if err := rateLimitWaitN(context.Background(), limiter, 10*Size); err != nil {
+	if err := rateLimitWaitN(context.Background(), []*rate.Limiter{limiter}, 10*Size); err != nil {
 		t.Fatalf("chunked waitN: %v", err)
 	}
 }
@@ -34,7 +34,7 @@ func TestRateLimitWaitNCanceledContext(t *testing.T) {
 	cancel()
 	limiter := rate.NewLimiter(rate.Limit(1), 1) // 1 B/s：不取消则要等十万秒
 	start := time.Now()
-	err := rateLimitWaitN(ctx, limiter, 100_000)
+	err := rateLimitWaitN(ctx, []*rate.Limiter{limiter}, 100_000)
 	if err == nil {
 		t.Fatal("want error from canceled ctx")
 	}
@@ -53,7 +53,7 @@ func TestRateLimitWaitNRetriesAfterBurstShrink(t *testing.T) {
 		limiter.SetBurst(Size)
 		done <- nil
 	}()
-	if err := rateLimitWaitN(context.Background(), limiter, 512*1024); err != nil {
+	if err := rateLimitWaitN(context.Background(), []*rate.Limiter{limiter}, 512*1024); err != nil {
 		t.Fatalf("waitN across burst shrink: %v", err)
 	}
 	<-done
@@ -65,7 +65,7 @@ func TestRateLimitWaitNRetriesAfterBurstShrink(t *testing.T) {
 func TestRateLimitPacingNoFullSecondBurst(t *testing.T) {
 	limiter, _ := NewRateLimiter(100_000)
 	start := time.Now()
-	if err := rateLimitWaitN(context.Background(), limiter, 50_000); err != nil {
+	if err := rateLimitWaitN(context.Background(), []*rate.Limiter{limiter}, 50_000); err != nil {
 		t.Fatalf("waitN: %v", err)
 	}
 	elapsed := time.Since(start)
@@ -74,5 +74,51 @@ func TestRateLimitPacingNoFullSecondBurst(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Errorf("pacing too slow: %v", elapsed)
+	}
+}
+
+// 串联语义：每一批字节要**依次通过每一个桶**，所以只要链条里有一个慢桶，
+// 整体就被它压住。这里把慢桶放在第二位——如果实现只取了第一个桶（回归到单速率），
+// 这段会瞬间返回，断言当场抓住。
+func TestRateLimitWaitNHonoursEveryBucketInChain(t *testing.T) {
+	fast, _ := NewRateLimiter(1_000_000_000) // 1GB/s，基本不构成约束
+	slow, _ := NewRateLimiter(100_000)       // 100KB/s，burst 12.5KB
+	start := time.Now()
+	if err := rateLimitWaitN(context.Background(), []*rate.Limiter{fast, slow}, 50_000); err != nil {
+		t.Fatalf("waitN: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < 250*time.Millisecond {
+		t.Errorf("链条里的慢桶被跳过了：50KB 只花了 %v，期望 ≈375ms", elapsed)
+	}
+}
+
+// 顺序无关：慢桶放第一位同样要生效。
+func TestRateLimitWaitNHonoursFirstBucketToo(t *testing.T) {
+	slow, _ := NewRateLimiter(100_000)
+	fast, _ := NewRateLimiter(1_000_000_000)
+	start := time.Now()
+	if err := rateLimitWaitN(context.Background(), []*rate.Limiter{slow, fast}, 50_000); err != nil {
+		t.Fatalf("waitN: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < 250*time.Millisecond {
+		t.Errorf("链条首位的慢桶被跳过了：50KB 只花了 %v，期望 ≈375ms", elapsed)
+	}
+}
+
+// compactLimiters：调用方可以无脑传「峰值桶, 承诺桶」，没配承诺速率时后者是 nil。
+// 全是 nil 时必须原样返回底层 reader/writer，不套一层空壳。
+func TestRateLimitWrappersDropNilLimiters(t *testing.T) {
+	limiter, _ := NewRateLimiter(100_000)
+	reader := &MultiBufferContainer{}
+	if got := NewRateLimitReaderWithLimiter(context.Background(), reader, nil, nil); got != Reader(reader) {
+		t.Error("全 nil 时不该包一层限速壳")
+	}
+	wrapped := NewRateLimitReaderWithLimiter(context.Background(), reader, nil, limiter)
+	rl, ok := wrapped.(*RateLimitReader)
+	if !ok {
+		t.Fatalf("期望 *RateLimitReader，得到 %T", wrapped)
+	}
+	if len(rl.limiters) != 1 || rl.limiters[0] != limiter {
+		t.Errorf("nil 没被丢掉：limiters = %v", rl.limiters)
 	}
 }

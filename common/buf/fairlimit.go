@@ -57,7 +57,7 @@ func (r *FairLimitReader) readWithTimeout(timeout time.Duration, withTimeout boo
 	if r.onBytes != nil {
 		r.onBytes(n)
 	}
-	if waitErr := rateLimitWaitN(r.ctx, r.limiter, n); waitErr != nil && err == nil {
+	if waitErr := rateLimitWaitOne(r.ctx, r.limiter, n); waitErr != nil && err == nil {
 		return mb, waitErr
 	}
 	return mb, err
@@ -89,6 +89,6 @@ func (w *FairLimitWriter) WriteMultiBuffer(mb MultiBuffer) error {
 		w.onBytes(n)
 	}
 	// 写前按速率整形（阻塞到 token 够或连接 ctx 取消），再交付下游。
-	_ = rateLimitWaitN(w.ctx, w.limiter, n)
+	_ = rateLimitWaitOne(w.ctx, w.limiter, n)
 	return w.Writer.WriteMultiBuffer(mb)
 }

@@ -32,11 +32,13 @@ func (u *User) ToMemoryUser() (*MemoryUser, error) {
 	// 都自动拿到同一套限速，不需要各自实现一个 limits 访问方法。
 	// 运行时 AddUser 也只经过这一个入口，没有第二条路径能绕过去。
 	return &MemoryUser{
-		Account:      account,
-		Email:        u.Email,
-		Level:        u.Level,
-		BandwidthBps: u.BandwidthBps,
-		ConnLimit:    u.ConnLimit,
+		Account:             account,
+		Email:               u.Email,
+		Level:               u.Level,
+		BandwidthBps:        u.BandwidthBps,
+		ConnLimit:           u.ConnLimit,
+		CommittedBps:        u.CommittedBps,
+		CommittedBurstBytes: u.CommittedBurstBytes,
 	}, nil
 }
 
@@ -45,10 +47,12 @@ func ToProtoUser(mu *MemoryUser) *User {
 		return nil
 	}
 	u := &User{
-		Email:        mu.Email,
-		Level:        mu.Level,
-		BandwidthBps: mu.BandwidthBps,
-		ConnLimit:    mu.ConnLimit,
+		Email:               mu.Email,
+		Level:               mu.Level,
+		BandwidthBps:        mu.BandwidthBps,
+		ConnLimit:           mu.ConnLimit,
+		CommittedBps:        mu.CommittedBps,
+		CommittedBurstBytes: mu.CommittedBurstBytes,
 	}
 	// Account 可以没有：socks/http/mixed 这类静态入站会把用户表示成一个
 	// 只带限速的 MemoryUser，密码另外放。序列化回去时必须容忍这一点，
@@ -67,4 +71,8 @@ type MemoryUser struct {
 	Level        uint32
 	BandwidthBps uint64
 	ConnLimit    uint32
+	// 双速率（可选，见 user.proto 与 RuntimeRateLimiters）：
+	// BandwidthBps 是 PIR，CommittedBps 是 CIR，CommittedBurstBytes 是 CBS。
+	CommittedBps        uint64
+	CommittedBurstBytes uint64
 }

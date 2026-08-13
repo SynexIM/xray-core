@@ -188,7 +188,10 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, destination net.Destina
 	// 效果是**没有 email 的用户永远限不上速，也逃掉节点级公平**——
 	// 拥挤时他们会挤压守规矩的用户。stats 那部分才真的需要 email（计数器名里有它）。
 	if user != nil {
-		if limiter, _ := user.RuntimeRateLimiter(buf.NewRateLimiter); limiter != nil {
+		// limiters 是串联的桶：单速率时一个，配了承诺速率（CIR）时是「峰值桶 + 承诺桶」。
+		// 这里不关心是几个——按用户拿到什么就原样套上去，双速率的语义全在
+		// protocol.RuntimeRateLimiters 里定义。
+		if limiters, _ := user.RuntimeRateLimiters(buf.NewRateLimiterWithBurst); len(limiters) > 0 {
 			// getLink 的两条管道是分开的（不是 WrapLink 那种单条双向 link）：
 			//   downlink 管道 = inboundLink.Reader (读) / outboundLink.Writer (写)
 			//   uplink   管道 = inboundLink.Writer (写) / outboundLink.Reader (读)
@@ -199,8 +202,8 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, destination net.Destina
 			// uplink 管道两端都没套 → 上行(上传)不限速（bug，从 WrapLink 误抄：那里 Reader=uplink/
 			// Writer=downlink 是单条 link 的恒等式，在这里的双管道拓扑不成立）。
 			// 修正：downlink 读端 + uplink 读端 各套一次。
-			inboundLink.Reader = buf.NewRateLimitReaderWithLimiter(ctx, inboundLink.Reader, limiter)   // downlink
-			outboundLink.Reader = buf.NewRateLimitReaderWithLimiter(ctx, outboundLink.Reader, limiter) // uplink
+			inboundLink.Reader = buf.NewRateLimitReaderWithLimiter(ctx, inboundLink.Reader, limiters...)   // downlink
+			outboundLink.Reader = buf.NewRateLimitReaderWithLimiter(ctx, outboundLink.Reader, limiters...) // uplink
 		}
 		// 节点级公平限速（ipipx 魔改）：套在 per-user 桶之外，双向整形使「节点总出口」生效。
 		// 节点公平未开启时 Acquire 返回 nil，wrapper 直通（零开销）。
@@ -283,9 +286,10 @@ func WrapLink(ctx context.Context, policyManager policy.Manager, statsManager st
 
 	// 同上：限速与公平只看用户本身，有没有 email 与它无关。
 	if user != nil {
-		if limiter, _ := user.RuntimeRateLimiter(buf.NewRateLimiter); limiter != nil {
-			link.Reader = buf.NewRateLimitReaderWithLimiter(ctx, link.Reader, limiter)
-			link.Writer = buf.NewRateLimitWriterWithLimiter(ctx, link.Writer, limiter)
+		// 同上：串联桶，单速率一个、双速率两个，这里原样套。
+		if limiters, _ := user.RuntimeRateLimiters(buf.NewRateLimiterWithBurst); len(limiters) > 0 {
+			link.Reader = buf.NewRateLimitReaderWithLimiter(ctx, link.Reader, limiters...)
+			link.Writer = buf.NewRateLimitWriterWithLimiter(ctx, link.Writer, limiters...)
 		}
 		// 节点级公平限速：套在 per-user 桶之外，双向整形使「节点总出口」生效。
 		if up, down, onBytes, release := protocol.FairScheduler().Acquire(user); up != nil {

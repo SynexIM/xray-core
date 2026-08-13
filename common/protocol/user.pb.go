@@ -36,10 +36,28 @@ type User struct {
 	// instead of each protocol re-implementing a RuntimeLimits() account method.
 	// 0 means unlimited. Bandwidth + connection cap + fair-share all key off the
 	// resulting *MemoryUser, so the dispatcher enforces them with no protocol code.
-	BandwidthBps  uint64 `protobuf:"varint,4,opt,name=bandwidth_bps,json=bandwidthBps,proto3" json:"bandwidth_bps,omitempty"`
-	ConnLimit     uint32 `protobuf:"varint,5,opt,name=conn_limit,json=connLimit,proto3" json:"conn_limit,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	BandwidthBps uint64 `protobuf:"varint,4,opt,name=bandwidth_bps,json=bandwidthBps,proto3" json:"bandwidth_bps,omitempty"`
+	ConnLimit    uint32 `protobuf:"varint,5,opt,name=conn_limit,json=connLimit,proto3" json:"conn_limit,omitempty"`
+	// Dual-rate shaping (PIR / CIR / CBS). Optional on top of bandwidth_bps.
+	//
+	//	bandwidth_bps          PIR — peak rate, what a burst is allowed to reach
+	//	committed_bps          CIR — committed rate, what is sustained forever
+	//	committed_burst_bytes  CBS — how much may be spent at PIR before falling
+	//	                             back to CIR
+	//
+	// Leaving committed_bps at 0 keeps the plain single-rate behaviour: one
+	// bucket at bandwidth_bps. Setting it stacks a second, much deeper bucket
+	// behind the peak one — traffic has to clear both, so a fresh line runs at
+	// PIR until its burst allowance drains and then settles at CIR.
+	//
+	// committed_burst_bytes = 0 means "one day of the committed rate", which is
+	// the sane default: a customer may spend their daily commitment whenever
+	// they like, at full speed, and still never exceed it over the day.
+	// committed_bps above bandwidth_bps is meaningless and is ignored.
+	CommittedBps        uint64 `protobuf:"varint,6,opt,name=committed_bps,json=committedBps,proto3" json:"committed_bps,omitempty"`
+	CommittedBurstBytes uint64 `protobuf:"varint,7,opt,name=committed_burst_bytes,json=committedBurstBytes,proto3" json:"committed_burst_bytes,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *User) Reset() {
@@ -107,18 +125,34 @@ func (x *User) GetConnLimit() uint32 {
 	return 0
 }
 
+func (x *User) GetCommittedBps() uint64 {
+	if x != nil {
+		return x.CommittedBps
+	}
+	return 0
+}
+
+func (x *User) GetCommittedBurstBytes() uint64 {
+	if x != nil {
+		return x.CommittedBurstBytes
+	}
+	return 0
+}
+
 var File_common_protocol_user_proto protoreflect.FileDescriptor
 
 const file_common_protocol_user_proto_rawDesc = "" +
 	"\n" +
-	"\x1acommon/protocol/user.proto\x12\x14xray.common.protocol\x1a!common/serial/typed_message.proto\"\xb2\x01\n" +
+	"\x1acommon/protocol/user.proto\x12\x14xray.common.protocol\x1a!common/serial/typed_message.proto\"\x8b\x02\n" +
 	"\x04User\x12\x14\n" +
 	"\x05level\x18\x01 \x01(\rR\x05level\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12:\n" +
 	"\aaccount\x18\x03 \x01(\v2 .xray.common.serial.TypedMessageR\aaccount\x12#\n" +
 	"\rbandwidth_bps\x18\x04 \x01(\x04R\fbandwidthBps\x12\x1d\n" +
 	"\n" +
-	"conn_limit\x18\x05 \x01(\rR\tconnLimitB^\n" +
+	"conn_limit\x18\x05 \x01(\rR\tconnLimit\x12#\n" +
+	"\rcommitted_bps\x18\x06 \x01(\x04R\fcommittedBps\x122\n" +
+	"\x15committed_burst_bytes\x18\a \x01(\x04R\x13committedBurstBytesB^\n" +
 	"\x18com.xray.common.protocolP\x01Z)github.com/xtls/xray-core/common/protocol\xaa\x02\x14Xray.Common.Protocolb\x06proto3"
 
 var (
