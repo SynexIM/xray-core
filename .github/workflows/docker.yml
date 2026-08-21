@@ -100,7 +100,8 @@ jobs:
             linux/arm64/v8
             linux/ppc64le
             linux/s390x
-          provenance: false
+          provenance: mode=max
+          sbom: true
           outputs: type=image,name=${{ env.FULL_IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Build Docker image (additional architectures)
@@ -114,7 +115,8 @@ jobs:
             linux/arm/v6
             linux/riscv64
             linux/loong64
-          provenance: false
+          provenance: mode=max
+          sbom: true
           outputs: type=image,name=${{ env.FULL_IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Create manifest list and push

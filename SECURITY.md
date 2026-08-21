@@ -1,5 +1,11 @@
 # Security Policy
 
-If you found an issue related to security vulnerability or protocol-identification problem, please report it to us via "[Report a vulnerability](https://github.com/XTLS/Xray-core/security/advisories/new)" privately, instead of publish it publicly before we release the fixed version.
+If you found a security vulnerability or protocol-identification problem in the
+SynexIM fork, report it privately through
+<https://github.com/SynexIM-Labs/xray-core/security/advisories/new> instead of
+publishing it before a fix is available.
+
+Include the affected release, platform, a minimal reproduction, and logs with
+secrets removed. The upstream MPL-2.0 license and attribution remain in force.
 
 Thanks for your contribution to the FREE Internet!

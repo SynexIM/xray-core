@@ -182,3 +182,7 @@ go build ./... && go test ./app/... ./common/... ./proxy/... ./infra/conf/...
 
 `common/geodata`、`app/dns`、`app/router` 的几个测试需要 `resources/geoip.dat`
 与 `geosite.dat`（仓库不带）或外网，本地跑不过是正常的。
+
+## Public release boundary
+
+This fork is published separately from the upstream XTLS release channel. The upstream MPL-2.0 license and copyright notices remain in force. See [RELEASE.md](RELEASE.md) for the tag, artifact, container, compatibility, and rollback requirements.
