@@ -9,17 +9,66 @@ option java_package = "com.xray.app.fairshare.command";
 option java_multiple_files = true;
 
 service FairShareService {
-  // SetNodeBandwidth 设置节点总出口上限（avail_bps，已含 headroom 折算）。0=关闭节点级公平。
+  // SetNodeBandwidth 设置节点整形上限 root_cap（avail_bps，已含 headroom 折算）与地板、拥塞滞回。
+  // 0=关闭节点级公平。
   rpc SetNodeBandwidth(SetNodeBandwidthRequest) returns (SetNodeBandwidthResponse) {}
+
+  // SetClassPolicy 整份替换 class（=SKU）策略表。声明式：没出现在请求里的 class 即被删除。
+  // 不另造通道——class 权重、normal_cap、突发信用全走这一个 rpc（FR-079e）。
+  rpc SetClassPolicy(SetClassPolicyRequest) returns (SetClassPolicyResponse) {}
 }
 
+// ⚠️ 单位陷阱（FR-079d）：本文件里的 `_bps` 后缀一律是 **字节/秒**，
+// 而 common/protocol/user.proto 里 User 的 `bandwidth_bps` / `committed_bps` 是 **比特/秒**。
+// 同一个后缀两处含义差 8 倍。这三个历史字段不改名（改名会断掉已经在跑的 node-agent），
+// 改为在此写死语义，并由 command_units_test.go / node_fairshare_units_test.go 两条断言测试钉住；
+// **新增的速率字段一律带 `_byte_per_sec` / `_bit_per_sec` 后缀**，见下方 ClassPolicy。
+// 谁要是「顺手统一成同一单位」，那两条测试会红。
 message SetNodeBandwidthRequest {
-  uint64 avail_bps = 1; // 节点总出口上限（字节/秒）= total_bandwidth_bps × headroom_pct/100
-  uint64 soft_floor_bps = 2; // 公平软地板（字节/秒）；0=默认 62500（0.5Mbps）。拥挤时每活跃用户的软保证。
-  uint64 hard_floor_bps = 3; // 绝对硬地板（字节/秒）；0=默认 16384（16KB/s）。任何情况下不掐到该值以下。
+  uint64 avail_bps = 1; // root_cap：节点整形上限，**字节/秒** = total_bandwidth_bps × headroom_pct/100。0=关闭节点级公平。
+  uint64 soft_floor_bps = 2; // 公平软地板，**字节/秒**。0 = 无软地板（不是「用默认值」，见 FR-079c）。
+  uint64 hard_floor_bps = 3; // 绝对硬地板，**字节/秒**。0 = 无硬地板。地板只在 floor×活跃人数 ≤ root_cap 时生效。
+
+  // 拥塞滞回（FR-076）。都是百分比/计数，没有单位歧义，故不带单位后缀。
+  uint32 congestion_enter_percent = 4; // 节点利用率越过该百分比才进入公平模式。0 = 不做拥塞判定，永远公平模式（= 改造前行为）。
+  uint32 congestion_exit_percent = 5;  // 回落到该百分比以下才考虑退出。0 或高于 enter 时取 enter。
+  uint32 congestion_exit_ticks = 6;    // 需连续多少个 tick（1 tick = 1 秒）低于 exit 才真的退出。0 视为 1。
 }
 
 message SetNodeBandwidthResponse {}
+
+// ClassPolicy 是一个 class（= 一个 SKU，如「短视频」「直播」）的争抢策略。
+// class 名字挂在 User.class 上随实例下发；这张表是运营参数，不进客户界面（FR-079f）。
+message ClassPolicy {
+  string name = 1; // class 名，与 User.class 对应。空名 = 未分类用户的兜底策略。
+
+  // 拥塞时按 weight 分剩余带宽。0 视为 1。直播应高于短视频。
+  uint32 weight = 2;
+
+  // normal_cap：**不拥挤时**这个 class 的单客户最高速率，字节/秒。
+  // ⚠️ 这不是保证带宽/CIR（FR-071）：500 客户 × 20Mbps = 10Gbps，物理上不可能承诺。
+  // 0 = 该 class 不设 class 级上限（仍受客户自己的 PIR/CIR 与 root_cap 约束）。
+  uint64 normal_cap_byte_per_sec = 3;
+
+  // burst_cap：持有突发信用时能冲到的峰值，字节/秒。必须 > normal_cap 才有意义。
+  // 0 = 该 class 不给突发。
+  uint64 burst_cap_byte_per_sec = 4;
+
+  // burst_credit_bytes：突发信用桶容量（字节）。信用只按「超出 normal_cap 的那部分字节」
+  // 扣（FR-078）；低于 normal_cap 时按未用满的差额回补。0 = 不给突发。
+  uint64 burst_credit_bytes = 5;
+
+  // floor_ratio_percent：该 class 的地板 = normal_cap × 该百分比。
+  // 与全局软地板取较大者，且仍受「地板×活跃人数 ≤ root_cap 才生效」的前提约束（FR-077）。
+  // 0 = 该 class 无专属地板。
+  uint32 floor_ratio_percent = 6;
+}
+
+message SetClassPolicyRequest {
+  repeated ClassPolicy classes = 1; // 整份替换。空列表 = 清空 class 表（全员同权重、无 class 上限）。
+}
+
+message SetClassPolicyResponse {}
 
 // Config 命令服务配置（gRPC server 经 RegisterConfig 实例化本服务）。
 message Config {}

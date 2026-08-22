@@ -24,13 +24,23 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// ⚠️ 单位陷阱（FR-079d）：本文件里的 `_bps` 后缀一律是 **字节/秒**，
+// 而 common/protocol/user.proto 里 User 的 `bandwidth_bps` / `committed_bps` 是 **比特/秒**。
+// 同一个后缀两处含义差 8 倍。这三个历史字段不改名（改名会断掉已经在跑的 node-agent），
+// 改为在此写死语义，并由 command_units_test.go / node_fairshare_units_test.go 两条断言测试钉住；
+// **新增的速率字段一律带 `_byte_per_sec` / `_bit_per_sec` 后缀**，见下方 ClassPolicy。
+// 谁要是「顺手统一成同一单位」，那两条测试会红。
 type SetNodeBandwidthRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AvailBps      uint64                 `protobuf:"varint,1,opt,name=avail_bps,json=availBps,proto3" json:"avail_bps,omitempty"`               // 节点总出口上限（字节/秒）= total_bandwidth_bps × headroom_pct/100
-	SoftFloorBps  uint64                 `protobuf:"varint,2,opt,name=soft_floor_bps,json=softFloorBps,proto3" json:"soft_floor_bps,omitempty"` // 公平软地板（字节/秒）；0=默认 62500（0.5Mbps）。拥挤时每活跃用户的软保证。
-	HardFloorBps  uint64                 `protobuf:"varint,3,opt,name=hard_floor_bps,json=hardFloorBps,proto3" json:"hard_floor_bps,omitempty"` // 绝对硬地板（字节/秒）；0=默认 16384（16KB/s）。任何情况下不掐到该值以下。
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	AvailBps     uint64                 `protobuf:"varint,1,opt,name=avail_bps,json=availBps,proto3" json:"avail_bps,omitempty"`               // root_cap：节点整形上限，**字节/秒** = total_bandwidth_bps × headroom_pct/100。0=关闭节点级公平。
+	SoftFloorBps uint64                 `protobuf:"varint,2,opt,name=soft_floor_bps,json=softFloorBps,proto3" json:"soft_floor_bps,omitempty"` // 公平软地板，**字节/秒**。0 = 无软地板（不是「用默认值」，见 FR-079c）。
+	HardFloorBps uint64                 `protobuf:"varint,3,opt,name=hard_floor_bps,json=hardFloorBps,proto3" json:"hard_floor_bps,omitempty"` // 绝对硬地板，**字节/秒**。0 = 无硬地板。地板只在 floor×活跃人数 ≤ root_cap 时生效。
+	// 拥塞滞回（FR-076）。都是百分比/计数，没有单位歧义，故不带单位后缀。
+	CongestionEnterPercent uint32 `protobuf:"varint,4,opt,name=congestion_enter_percent,json=congestionEnterPercent,proto3" json:"congestion_enter_percent,omitempty"` // 节点利用率越过该百分比才进入公平模式。0 = 不做拥塞判定，永远公平模式（= 改造前行为）。
+	CongestionExitPercent  uint32 `protobuf:"varint,5,opt,name=congestion_exit_percent,json=congestionExitPercent,proto3" json:"congestion_exit_percent,omitempty"`    // 回落到该百分比以下才考虑退出。0 或高于 enter 时取 enter。
+	CongestionExitTicks    uint32 `protobuf:"varint,6,opt,name=congestion_exit_ticks,json=congestionExitTicks,proto3" json:"congestion_exit_ticks,omitempty"`          // 需连续多少个 tick（1 tick = 1 秒）低于 exit 才真的退出。0 视为 1。
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *SetNodeBandwidthRequest) Reset() {
@@ -84,6 +94,27 @@ func (x *SetNodeBandwidthRequest) GetHardFloorBps() uint64 {
 	return 0
 }
 
+func (x *SetNodeBandwidthRequest) GetCongestionEnterPercent() uint32 {
+	if x != nil {
+		return x.CongestionEnterPercent
+	}
+	return 0
+}
+
+func (x *SetNodeBandwidthRequest) GetCongestionExitPercent() uint32 {
+	if x != nil {
+		return x.CongestionExitPercent
+	}
+	return 0
+}
+
+func (x *SetNodeBandwidthRequest) GetCongestionExitTicks() uint32 {
+	if x != nil {
+		return x.CongestionExitTicks
+	}
+	return 0
+}
+
 type SetNodeBandwidthResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -120,6 +151,183 @@ func (*SetNodeBandwidthResponse) Descriptor() ([]byte, []int) {
 	return file_app_fairshare_command_command_proto_rawDescGZIP(), []int{1}
 }
 
+// ClassPolicy 是一个 class（= 一个 SKU，如「短视频」「直播」）的争抢策略。
+// class 名字挂在 User.class 上随实例下发；这张表是运营参数，不进客户界面（FR-079f）。
+type ClassPolicy struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"` // class 名，与 User.class 对应。空名 = 未分类用户的兜底策略。
+	// 拥塞时按 weight 分剩余带宽。0 视为 1。直播应高于短视频。
+	Weight uint32 `protobuf:"varint,2,opt,name=weight,proto3" json:"weight,omitempty"`
+	// normal_cap：**不拥挤时**这个 class 的单客户最高速率，字节/秒。
+	// ⚠️ 这不是保证带宽/CIR（FR-071）：500 客户 × 20Mbps = 10Gbps，物理上不可能承诺。
+	// 0 = 该 class 不设 class 级上限（仍受客户自己的 PIR/CIR 与 root_cap 约束）。
+	NormalCapBytePerSec uint64 `protobuf:"varint,3,opt,name=normal_cap_byte_per_sec,json=normalCapBytePerSec,proto3" json:"normal_cap_byte_per_sec,omitempty"`
+	// burst_cap：持有突发信用时能冲到的峰值，字节/秒。必须 > normal_cap 才有意义。
+	// 0 = 该 class 不给突发。
+	BurstCapBytePerSec uint64 `protobuf:"varint,4,opt,name=burst_cap_byte_per_sec,json=burstCapBytePerSec,proto3" json:"burst_cap_byte_per_sec,omitempty"`
+	// burst_credit_bytes：突发信用桶容量（字节）。信用只按「超出 normal_cap 的那部分字节」
+	// 扣（FR-078）；低于 normal_cap 时按未用满的差额回补。0 = 不给突发。
+	BurstCreditBytes uint64 `protobuf:"varint,5,opt,name=burst_credit_bytes,json=burstCreditBytes,proto3" json:"burst_credit_bytes,omitempty"`
+	// floor_ratio_percent：该 class 的地板 = normal_cap × 该百分比。
+	// 与全局软地板取较大者，且仍受「地板×活跃人数 ≤ root_cap 才生效」的前提约束（FR-077）。
+	// 0 = 该 class 无专属地板。
+	FloorRatioPercent uint32 `protobuf:"varint,6,opt,name=floor_ratio_percent,json=floorRatioPercent,proto3" json:"floor_ratio_percent,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *ClassPolicy) Reset() {
+	*x = ClassPolicy{}
+	mi := &file_app_fairshare_command_command_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClassPolicy) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClassPolicy) ProtoMessage() {}
+
+func (x *ClassPolicy) ProtoReflect() protoreflect.Message {
+	mi := &file_app_fairshare_command_command_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClassPolicy.ProtoReflect.Descriptor instead.
+func (*ClassPolicy) Descriptor() ([]byte, []int) {
+	return file_app_fairshare_command_command_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ClassPolicy) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ClassPolicy) GetWeight() uint32 {
+	if x != nil {
+		return x.Weight
+	}
+	return 0
+}
+
+func (x *ClassPolicy) GetNormalCapBytePerSec() uint64 {
+	if x != nil {
+		return x.NormalCapBytePerSec
+	}
+	return 0
+}
+
+func (x *ClassPolicy) GetBurstCapBytePerSec() uint64 {
+	if x != nil {
+		return x.BurstCapBytePerSec
+	}
+	return 0
+}
+
+func (x *ClassPolicy) GetBurstCreditBytes() uint64 {
+	if x != nil {
+		return x.BurstCreditBytes
+	}
+	return 0
+}
+
+func (x *ClassPolicy) GetFloorRatioPercent() uint32 {
+	if x != nil {
+		return x.FloorRatioPercent
+	}
+	return 0
+}
+
+type SetClassPolicyRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Classes       []*ClassPolicy         `protobuf:"bytes,1,rep,name=classes,proto3" json:"classes,omitempty"` // 整份替换。空列表 = 清空 class 表（全员同权重、无 class 上限）。
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetClassPolicyRequest) Reset() {
+	*x = SetClassPolicyRequest{}
+	mi := &file_app_fairshare_command_command_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetClassPolicyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetClassPolicyRequest) ProtoMessage() {}
+
+func (x *SetClassPolicyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_app_fairshare_command_command_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetClassPolicyRequest.ProtoReflect.Descriptor instead.
+func (*SetClassPolicyRequest) Descriptor() ([]byte, []int) {
+	return file_app_fairshare_command_command_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *SetClassPolicyRequest) GetClasses() []*ClassPolicy {
+	if x != nil {
+		return x.Classes
+	}
+	return nil
+}
+
+type SetClassPolicyResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetClassPolicyResponse) Reset() {
+	*x = SetClassPolicyResponse{}
+	mi := &file_app_fairshare_command_command_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetClassPolicyResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetClassPolicyResponse) ProtoMessage() {}
+
+func (x *SetClassPolicyResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_app_fairshare_command_command_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetClassPolicyResponse.ProtoReflect.Descriptor instead.
+func (*SetClassPolicyResponse) Descriptor() ([]byte, []int) {
+	return file_app_fairshare_command_command_proto_rawDescGZIP(), []int{4}
+}
+
 // Config 命令服务配置（gRPC server 经 RegisterConfig 实例化本服务）。
 type Config struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -129,7 +337,7 @@ type Config struct {
 
 func (x *Config) Reset() {
 	*x = Config{}
-	mi := &file_app_fairshare_command_command_proto_msgTypes[2]
+	mi := &file_app_fairshare_command_command_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -141,7 +349,7 @@ func (x *Config) String() string {
 func (*Config) ProtoMessage() {}
 
 func (x *Config) ProtoReflect() protoreflect.Message {
-	mi := &file_app_fairshare_command_command_proto_msgTypes[2]
+	mi := &file_app_fairshare_command_command_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -154,22 +362,36 @@ func (x *Config) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Config.ProtoReflect.Descriptor instead.
 func (*Config) Descriptor() ([]byte, []int) {
-	return file_app_fairshare_command_command_proto_rawDescGZIP(), []int{2}
+	return file_app_fairshare_command_command_proto_rawDescGZIP(), []int{5}
 }
 
 var File_app_fairshare_command_command_proto protoreflect.FileDescriptor
 
 const file_app_fairshare_command_command_proto_rawDesc = "" +
 	"\n" +
-	"#app/fairshare/command/command.proto\x12\x1axray.app.fairshare.command\"\x82\x01\n" +
+	"#app/fairshare/command/command.proto\x12\x1axray.app.fairshare.command\"\xa8\x02\n" +
 	"\x17SetNodeBandwidthRequest\x12\x1b\n" +
 	"\tavail_bps\x18\x01 \x01(\x04R\bavailBps\x12$\n" +
 	"\x0esoft_floor_bps\x18\x02 \x01(\x04R\fsoftFloorBps\x12$\n" +
-	"\x0ehard_floor_bps\x18\x03 \x01(\x04R\fhardFloorBps\"\x1a\n" +
-	"\x18SetNodeBandwidthResponse\"\b\n" +
-	"\x06Config2\x93\x01\n" +
+	"\x0ehard_floor_bps\x18\x03 \x01(\x04R\fhardFloorBps\x128\n" +
+	"\x18congestion_enter_percent\x18\x04 \x01(\rR\x16congestionEnterPercent\x126\n" +
+	"\x17congestion_exit_percent\x18\x05 \x01(\rR\x15congestionExitPercent\x122\n" +
+	"\x15congestion_exit_ticks\x18\x06 \x01(\rR\x13congestionExitTicks\"\x1a\n" +
+	"\x18SetNodeBandwidthResponse\"\x81\x02\n" +
+	"\vClassPolicy\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
+	"\x06weight\x18\x02 \x01(\rR\x06weight\x124\n" +
+	"\x17normal_cap_byte_per_sec\x18\x03 \x01(\x04R\x13normalCapBytePerSec\x122\n" +
+	"\x16burst_cap_byte_per_sec\x18\x04 \x01(\x04R\x12burstCapBytePerSec\x12,\n" +
+	"\x12burst_credit_bytes\x18\x05 \x01(\x04R\x10burstCreditBytes\x12.\n" +
+	"\x13floor_ratio_percent\x18\x06 \x01(\rR\x11floorRatioPercent\"Z\n" +
+	"\x15SetClassPolicyRequest\x12A\n" +
+	"\aclasses\x18\x01 \x03(\v2'.xray.app.fairshare.command.ClassPolicyR\aclasses\"\x18\n" +
+	"\x16SetClassPolicyResponse\"\b\n" +
+	"\x06Config2\x8e\x02\n" +
 	"\x10FairShareService\x12\x7f\n" +
-	"\x10SetNodeBandwidth\x123.xray.app.fairshare.command.SetNodeBandwidthRequest\x1a4.xray.app.fairshare.command.SetNodeBandwidthResponse\"\x00Bp\n" +
+	"\x10SetNodeBandwidth\x123.xray.app.fairshare.command.SetNodeBandwidthRequest\x1a4.xray.app.fairshare.command.SetNodeBandwidthResponse\"\x00\x12y\n" +
+	"\x0eSetClassPolicy\x121.xray.app.fairshare.command.SetClassPolicyRequest\x1a2.xray.app.fairshare.command.SetClassPolicyResponse\"\x00Bp\n" +
 	"\x1ecom.xray.app.fairshare.commandP\x01Z/github.com/xtls/xray-core/app/fairshare/command\xaa\x02\x1aXray.App.FairShare.Commandb\x06proto3"
 
 var (
@@ -184,20 +406,26 @@ func file_app_fairshare_command_command_proto_rawDescGZIP() []byte {
 	return file_app_fairshare_command_command_proto_rawDescData
 }
 
-var file_app_fairshare_command_command_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_app_fairshare_command_command_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_app_fairshare_command_command_proto_goTypes = []any{
 	(*SetNodeBandwidthRequest)(nil),  // 0: xray.app.fairshare.command.SetNodeBandwidthRequest
 	(*SetNodeBandwidthResponse)(nil), // 1: xray.app.fairshare.command.SetNodeBandwidthResponse
-	(*Config)(nil),                   // 2: xray.app.fairshare.command.Config
+	(*ClassPolicy)(nil),              // 2: xray.app.fairshare.command.ClassPolicy
+	(*SetClassPolicyRequest)(nil),    // 3: xray.app.fairshare.command.SetClassPolicyRequest
+	(*SetClassPolicyResponse)(nil),   // 4: xray.app.fairshare.command.SetClassPolicyResponse
+	(*Config)(nil),                   // 5: xray.app.fairshare.command.Config
 }
 var file_app_fairshare_command_command_proto_depIdxs = []int32{
-	0, // 0: xray.app.fairshare.command.FairShareService.SetNodeBandwidth:input_type -> xray.app.fairshare.command.SetNodeBandwidthRequest
-	1, // 1: xray.app.fairshare.command.FairShareService.SetNodeBandwidth:output_type -> xray.app.fairshare.command.SetNodeBandwidthResponse
-	1, // [1:2] is the sub-list for method output_type
-	0, // [0:1] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	2, // 0: xray.app.fairshare.command.SetClassPolicyRequest.classes:type_name -> xray.app.fairshare.command.ClassPolicy
+	0, // 1: xray.app.fairshare.command.FairShareService.SetNodeBandwidth:input_type -> xray.app.fairshare.command.SetNodeBandwidthRequest
+	3, // 2: xray.app.fairshare.command.FairShareService.SetClassPolicy:input_type -> xray.app.fairshare.command.SetClassPolicyRequest
+	1, // 3: xray.app.fairshare.command.FairShareService.SetNodeBandwidth:output_type -> xray.app.fairshare.command.SetNodeBandwidthResponse
+	4, // 4: xray.app.fairshare.command.FairShareService.SetClassPolicy:output_type -> xray.app.fairshare.command.SetClassPolicyResponse
+	3, // [3:5] is the sub-list for method output_type
+	1, // [1:3] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_app_fairshare_command_command_proto_init() }
@@ -211,7 +439,7 @@ func file_app_fairshare_command_command_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_app_fairshare_command_command_proto_rawDesc), len(file_app_fairshare_command_command_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

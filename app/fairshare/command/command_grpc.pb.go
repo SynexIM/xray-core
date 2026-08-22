@@ -23,14 +23,19 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	FairShareService_SetNodeBandwidth_FullMethodName = "/xray.app.fairshare.command.FairShareService/SetNodeBandwidth"
+	FairShareService_SetClassPolicy_FullMethodName   = "/xray.app.fairshare.command.FairShareService/SetClassPolicy"
 )
 
 // FairShareServiceClient is the client API for FairShareService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type FairShareServiceClient interface {
-	// SetNodeBandwidth 设置节点总出口上限（avail_bps，已含 headroom 折算）。0=关闭节点级公平。
+	// SetNodeBandwidth 设置节点整形上限 root_cap（avail_bps，已含 headroom 折算）与地板、拥塞滞回。
+	// 0=关闭节点级公平。
 	SetNodeBandwidth(ctx context.Context, in *SetNodeBandwidthRequest, opts ...grpc.CallOption) (*SetNodeBandwidthResponse, error)
+	// SetClassPolicy 整份替换 class（=SKU）策略表。声明式：没出现在请求里的 class 即被删除。
+	// 不另造通道——class 权重、normal_cap、突发信用全走这一个 rpc（FR-079e）。
+	SetClassPolicy(ctx context.Context, in *SetClassPolicyRequest, opts ...grpc.CallOption) (*SetClassPolicyResponse, error)
 }
 
 type fairShareServiceClient struct {
@@ -51,12 +56,26 @@ func (c *fairShareServiceClient) SetNodeBandwidth(ctx context.Context, in *SetNo
 	return out, nil
 }
 
+func (c *fairShareServiceClient) SetClassPolicy(ctx context.Context, in *SetClassPolicyRequest, opts ...grpc.CallOption) (*SetClassPolicyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetClassPolicyResponse)
+	err := c.cc.Invoke(ctx, FairShareService_SetClassPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FairShareServiceServer is the server API for FairShareService service.
 // All implementations must embed UnimplementedFairShareServiceServer
 // for forward compatibility.
 type FairShareServiceServer interface {
-	// SetNodeBandwidth 设置节点总出口上限（avail_bps，已含 headroom 折算）。0=关闭节点级公平。
+	// SetNodeBandwidth 设置节点整形上限 root_cap（avail_bps，已含 headroom 折算）与地板、拥塞滞回。
+	// 0=关闭节点级公平。
 	SetNodeBandwidth(context.Context, *SetNodeBandwidthRequest) (*SetNodeBandwidthResponse, error)
+	// SetClassPolicy 整份替换 class（=SKU）策略表。声明式：没出现在请求里的 class 即被删除。
+	// 不另造通道——class 权重、normal_cap、突发信用全走这一个 rpc（FR-079e）。
+	SetClassPolicy(context.Context, *SetClassPolicyRequest) (*SetClassPolicyResponse, error)
 	mustEmbedUnimplementedFairShareServiceServer()
 }
 
@@ -69,6 +88,9 @@ type UnimplementedFairShareServiceServer struct{}
 
 func (UnimplementedFairShareServiceServer) SetNodeBandwidth(context.Context, *SetNodeBandwidthRequest) (*SetNodeBandwidthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetNodeBandwidth not implemented")
+}
+func (UnimplementedFairShareServiceServer) SetClassPolicy(context.Context, *SetClassPolicyRequest) (*SetClassPolicyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetClassPolicy not implemented")
 }
 func (UnimplementedFairShareServiceServer) mustEmbedUnimplementedFairShareServiceServer() {}
 func (UnimplementedFairShareServiceServer) testEmbeddedByValue()                          {}
@@ -109,6 +131,24 @@ func _FairShareService_SetNodeBandwidth_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FairShareService_SetClassPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetClassPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FairShareServiceServer).SetClassPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FairShareService_SetClassPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FairShareServiceServer).SetClassPolicy(ctx, req.(*SetClassPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // FairShareService_ServiceDesc is the grpc.ServiceDesc for FairShareService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -119,6 +159,10 @@ var FairShareService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetNodeBandwidth",
 			Handler:    _FairShareService_SetNodeBandwidth_Handler,
+		},
+		{
+			MethodName: "SetClassPolicy",
+			Handler:    _FairShareService_SetClassPolicy_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
