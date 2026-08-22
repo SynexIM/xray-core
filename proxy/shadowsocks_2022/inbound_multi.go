@@ -3,6 +3,7 @@ package shadowsocks_2022
 import (
 	"context"
 	"encoding/base64"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,11 +37,23 @@ func init() {
 	}))
 }
 
+// MultiUserInbound 的用户表：一份 slice（sing 的 EIH 表按下标索引它）+ 一份
+// email→下标的索引。
+//
+// 为什么要索引：目标是 5 万实例/单节点组，AddUser/RemoveUser/GetUser 原来都是
+// 线性扫 email，管理路径 O(N)。索引把它压成 O(1)。
+//
+// 为什么还要批量入口：真正贵的不是扫 email，是 sing 的 EIH 表**整份重建**
+// （UpdateUsersWithPasswords 对全表做 base64 解码 + blake3 + AES 派生，上游自己
+// 在下面留了注释承认这里性能不行）。逐个增删 5000 个客户 = 重建 5000 次全表。
+// AddUsers/RemoveUsers 把一批合成一次重建，并且只锁一次。
 type MultiUserInbound struct {
 	sync.Mutex
 	networks []net.Network
 	users    []*protocol.MemoryUser
-	service  *shadowaead_2022.MultiService[int]
+	// index 是 strings.ToLower(email) → users 下标。
+	index   map[string]int
+	service *shadowaead_2022.MultiService[int]
 }
 
 func NewMultiServer(ctx context.Context, config *MultiUserServerConfig) (*MultiUserInbound, error) {
@@ -67,6 +80,10 @@ func NewMultiServer(ctx context.Context, config *MultiUserServerConfig) (*MultiU
 	inbound := &MultiUserInbound{
 		networks: networks,
 		users:    memUsers,
+		index:    make(map[string]int, len(memUsers)),
+	}
+	for i, u := range memUsers {
+		inbound.index[strings.ToLower(u.Email)] = i
 	}
 	if config.Key == "" {
 		return nil, errors.New("missing key")
@@ -93,63 +110,102 @@ func NewMultiServer(ctx context.Context, config *MultiUserServerConfig) (*MultiU
 
 // AddUser implements proxy.UserManager.AddUser().
 func (i *MultiUserInbound) AddUser(ctx context.Context, u *protocol.MemoryUser) error {
+	return i.AddUsers(ctx, []*protocol.MemoryUser{u})
+}
+
+// AddUsers implements proxy.BatchUserManager.AddUsers()：一批客户一次入表、
+// 一次 EIH 重建、一次锁。5000 个客户的月度换手不该重建 5000 次全表。
+//
+// 原子：批里有一个 email 撞车就整批不生效，不留半截状态——半截生效的下发会让
+// 面板与节点的 configHash 对不上，而那种漂移要人肉去查。
+func (i *MultiUserInbound) AddUsers(ctx context.Context, users []*protocol.MemoryUser) error {
+	if len(users) == 0 {
+		return nil
+	}
+
 	i.Lock()
 	defer i.Unlock()
 
-	if u.Email != "" {
-		for idx := range i.users {
-			if i.users[idx].Email == u.Email {
-				return errors.New("User ", u.Email, " already exists.")
-			}
+	seen := make(map[string]struct{}, len(users))
+	for _, u := range users {
+		if u.Email == "" {
+			continue
 		}
+		key := strings.ToLower(u.Email)
+		if _, exists := i.index[key]; exists {
+			return errors.New("User ", u.Email, " already exists.")
+		}
+		if _, dup := seen[key]; dup {
+			return errors.New("User ", u.Email, " appears twice in the same batch.")
+		}
+		seen[key] = struct{}{}
 	}
-	i.users = append(i.users, u)
 
-	// sync to multi service
-	// Considering implements shadowsocks2022 in xray-core may have better performance.
-	i.service.UpdateUsersWithPasswords(
-		C.MapIndexed(i.users, func(index int, it *protocol.MemoryUser) int { return index }),
-		C.Map(i.users, func(it *protocol.MemoryUser) string { return it.Account.(*MemoryAccount).Key }),
-	)
-
-	return nil
+	for _, u := range users {
+		i.index[strings.ToLower(u.Email)] = len(i.users)
+		i.users = append(i.users, u)
+	}
+	return i.syncService()
 }
 
 // RemoveUser implements proxy.UserManager.RemoveUser().
 func (i *MultiUserInbound) RemoveUser(ctx context.Context, email string) error {
-	if email == "" {
-		return errors.New("Email must not be empty.")
+	return i.RemoveUsers(ctx, []string{email})
+}
+
+// RemoveUsers implements proxy.BatchUserManager.RemoveUsers()：同 AddUsers，
+// 一批一次重建、一次锁、全有或全无。
+func (i *MultiUserInbound) RemoveUsers(ctx context.Context, emails []string) error {
+	if len(emails) == 0 {
+		return nil
 	}
 
 	i.Lock()
 	defer i.Unlock()
 
-	idx := -1
-	for ii, u := range i.users {
-		if strings.EqualFold(u.Email, email) {
-			idx = ii
-			break
+	idxs := make([]int, 0, len(emails))
+	seen := make(map[string]struct{}, len(emails))
+	for _, email := range emails {
+		if email == "" {
+			return errors.New("Email must not be empty.")
 		}
+		key := strings.ToLower(email)
+		if _, dup := seen[key]; dup {
+			return errors.New("User ", email, " appears twice in the same batch.")
+		}
+		seen[key] = struct{}{}
+		idx, ok := i.index[key]
+		if !ok {
+			return errors.New("User ", email, " not found.")
+		}
+		idxs = append(idxs, idx)
 	}
 
-	if idx == -1 {
-		return errors.New("User ", email, " not found.")
+	// 从大到小删，swap-with-last 才不会把还没处理的下标搅乱。
+	sort.Sort(sort.Reverse(sort.IntSlice(idxs)))
+	for _, idx := range idxs {
+		last := len(i.users) - 1
+		delete(i.index, strings.ToLower(i.users[idx].Email))
+		if idx != last {
+			i.users[idx] = i.users[last]
+			i.index[strings.ToLower(i.users[idx].Email)] = idx
+		}
+		i.users[last] = nil
+		i.users = i.users[:last]
 	}
+	return i.syncService()
+}
 
-	ulen := len(i.users)
-
-	i.users[idx] = i.users[ulen-1]
-	i.users[ulen-1] = nil
-	i.users = i.users[:ulen-1]
-
-	// sync to multi service
-	// Considering implements shadowsocks2022 in xray-core may have better performance.
-	i.service.UpdateUsersWithPasswords(
+// syncService 把用户表推给 sing 的 EIH 表。调用方必须已持锁。
+//
+// 整份重建是 sing-shadowsocks 的 API 决定的：MultiService 只暴露 UpdateUsers，
+// uPSK/uPSKHash/uCipher 三张表都是包内私有，没有增量入口。所以这里能做的是
+// **把重建次数压到每批一次**，而不是每个客户一次。
+func (i *MultiUserInbound) syncService() error {
+	return i.service.UpdateUsersWithPasswords(
 		C.MapIndexed(i.users, func(index int, it *protocol.MemoryUser) int { return index }),
 		C.Map(i.users, func(it *protocol.MemoryUser) string { return it.Account.(*MemoryAccount).Key }),
 	)
-
-	return nil
 }
 
 // GetUser implements proxy.UserManager.GetUser().
@@ -161,10 +217,8 @@ func (i *MultiUserInbound) GetUser(ctx context.Context, email string) *protocol.
 	i.Lock()
 	defer i.Unlock()
 
-	for _, u := range i.users {
-		if strings.EqualFold(u.Email, email) {
-			return u
-		}
+	if idx, ok := i.index[strings.ToLower(email)]; ok {
+		return i.users[idx]
 	}
 	return nil
 }

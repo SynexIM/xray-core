@@ -18,6 +18,21 @@ message RemoveUserOperation {
   string email = 1;
 }
 
+// AddUsersOperation / RemoveUsersOperation 是一批客户一次装卸。
+//
+// 光有 BatchAlterInbound 不够：它只是把 N 个 RPC 合成一个 RPC，落到 inbound 上
+// 仍然是 N 次单客户操作。SS2022 每次单客户操作都要整份重建 EIH 表，
+// 5 万实例下这就是 N 次全表派生。这两个 op 让 inbound 真的只动一次表。
+//
+// 整批原子：里面有一个坏的（email 撞车、要删的不存在）就整批不生效。
+message AddUsersOperation {
+  repeated xray.common.protocol.User users = 1;
+}
+
+message RemoveUsersOperation {
+  repeated string emails = 1;
+}
+
 // UpdateUserOperation updates an existing user in place, keyed by email. It is
 // used to mutate per-user runtime limits (bandwidth_bps / conn_limit) and the
 // protocol account/credential without the remove+add churn that drops live

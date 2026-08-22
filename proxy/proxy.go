@@ -102,6 +102,24 @@ type UserUpdater interface {
 	UpdateUser(context.Context, *protocol.MemoryUser) error
 }
 
+// BatchUserManager is an optional capability for UserManagers that can apply a
+// whole batch of adds or removes with one table rebuild and one lock
+// acquisition.
+//
+// 为什么值得单独一个接口：SS2022 的 EIH 表在 sing-shadowsocks 里只能整份重建，
+// 逐个增删 5000 个客户 = 重建 5000 次全表，实测 5 万用户底数下这条路要跑好几分钟，
+// 期间认证路径被那把锁一段一段地卡住。批量入口把它压成一次重建、一次锁。
+//
+// 与 UserUpdater 同样是可选能力：没实现的 proxy 由调用方退回逐个走法，
+// 不需要每个协议都写一遍——它们的增删本来就是 O(1)，批量对它们没有额外好处。
+//
+// 批量必须是原子的：批里有一个坏的就整批不生效。半截生效的下发会让面板与节点
+// 的 configHash 对不上，而那种漂移要人肉去查。
+type BatchUserManager interface {
+	AddUsers(context.Context, []*protocol.MemoryUser) error
+	RemoveUsers(context.Context, []string) error
+}
+
 type GetInbound interface {
 	GetInbound() Inbound
 }

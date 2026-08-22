@@ -62,7 +62,92 @@ func (op *RemoveUserOperation) ApplyInbound(ctx context.Context, handler inbound
 	if !ok {
 		return errors.New("proxy is not a UserManager")
 	}
-	return um.RemoveUser(ctx, op.Email)
+	return removeUsers(ctx, um, []string{op.Email})
+}
+
+// ApplyInbound implements InboundOperation. 一批客户一次装表。
+func (op *AddUsersOperation) ApplyInbound(ctx context.Context, handler inbound.Handler) error {
+	p, err := getInbound(handler)
+	if err != nil {
+		return err
+	}
+	um, ok := p.(proxy.UserManager)
+	if !ok {
+		return errors.New("proxy is not a UserManager")
+	}
+	users := make([]*protocol.MemoryUser, 0, len(op.Users))
+	for _, u := range op.Users {
+		mUser, err := u.ToMemoryUser()
+		if err != nil {
+			return errors.New("failed to parse user").Base(err)
+		}
+		users = append(users, mUser)
+	}
+	return applyAddUsers(ctx, um, users)
+}
+
+// applyAddUsers 有批量能力就一次装表，没有就退回逐个走法
+// （那些 proxy 的增删本来就是 O(1)，批量对它们没有额外好处）。
+func applyAddUsers(ctx context.Context, um proxy.UserManager, users []*protocol.MemoryUser) error {
+	if bm, ok := um.(proxy.BatchUserManager); ok {
+		return bm.AddUsers(ctx, users)
+	}
+	for _, u := range users {
+		if err := um.AddUser(ctx, u); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ApplyInbound implements InboundOperation. 一批客户一次卸表。
+func (op *RemoveUsersOperation) ApplyInbound(ctx context.Context, handler inbound.Handler) error {
+	p, err := getInbound(handler)
+	if err != nil {
+		return err
+	}
+	um, ok := p.(proxy.UserManager)
+	if !ok {
+		return errors.New("proxy is not a UserManager")
+	}
+	return removeUsers(ctx, um, op.Emails)
+}
+
+// removeUsers 卸载用户，并把他们在进程里留下的运行态一并清掉。
+//
+// 为什么清理要放在这里：per-user 限速桶挂在全局 runtimeLimiters（sync.Map，键是
+// *MemoryUser 指针）上，连接计数同理。用户从 validator 里被删掉之后，那两张表
+// 仍然攥着他的指针——既回收不了内存，也让这个用户永远活在进程里。
+// 5 万实例的月度换手会稳定地攒出几万个这样的僵尸条目。
+//
+// 各协议的 RemoveUser 只收 email，拿不到 *MemoryUser，所以清理只能在**知道
+// 用户是谁**的这一层做：先查后删再清。放在这里还有一个好处——五个协议共用
+// 一份逻辑，不会有哪个协议漏掉。
+func removeUsers(ctx context.Context, um proxy.UserManager, emails []string) error {
+	stale := make([]*protocol.MemoryUser, 0, len(emails))
+	for _, email := range emails {
+		if u := um.GetUser(ctx, email); u != nil {
+			stale = append(stale, u)
+		}
+	}
+
+	if bm, ok := um.(proxy.BatchUserManager); ok {
+		if err := bm.RemoveUsers(ctx, emails); err != nil {
+			return err
+		}
+	} else {
+		for _, email := range emails {
+			if err := um.RemoveUser(ctx, email); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, u := range stale {
+		u.ResetRuntimeLimiter()
+		u.ResetRuntimeConnections()
+	}
+	return nil
 }
 
 // ApplyInbound implements InboundOperation. It updates an existing user in place

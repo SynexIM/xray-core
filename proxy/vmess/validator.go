@@ -14,9 +14,14 @@ import (
 )
 
 // TimedUserValidator is a user Validator based on time.
+//
+// index 是 strings.ToLower(email) → users 下标：Remove 原来线性扫 email，
+// 5 万实例/单节点组下管理路径就是 O(N)。认证路径（GetAEAD）本来就是 O(1)
+// 哈希查表，没动。
 type TimedUserValidator struct {
 	sync.RWMutex
 	users []*protocol.MemoryUser
+	index map[string]int
 
 	behaviorSeed  uint64
 	behaviorFused bool
@@ -28,6 +33,7 @@ type TimedUserValidator struct {
 func NewTimedUserValidator() *TimedUserValidator {
 	tuv := &TimedUserValidator{
 		users:             make([]*protocol.MemoryUser, 0, 16),
+		index:             make(map[string]int, 16),
 		aeadDecoderHolder: aead.NewAuthIDDecoderHolder(),
 	}
 	return tuv
@@ -37,6 +43,12 @@ func (v *TimedUserValidator) Add(u *protocol.MemoryUser) error {
 	v.Lock()
 	defer v.Unlock()
 
+	if u.Email != "" {
+		if v.index == nil {
+			v.index = make(map[string]int)
+		}
+		v.index[strings.ToLower(u.Email)] = len(v.users)
+	}
 	v.users = append(v.users, u)
 
 	account, ok := u.Account.(*MemoryAccount)
@@ -89,24 +101,22 @@ func (v *TimedUserValidator) Remove(email string) bool {
 	defer v.Unlock()
 
 	email = strings.ToLower(email)
-	idx := -1
-	for i, u := range v.users {
-		if strings.EqualFold(u.Email, email) {
-			idx = i
-			var cmdkeyfl [16]byte
-			copy(cmdkeyfl[:], u.Account.(*MemoryAccount).ID.CmdKey())
-			v.aeadDecoderHolder.RemoveUser(cmdkeyfl)
-			break
-		}
-	}
-	if idx == -1 {
+	idx, ok := v.index[email]
+	if !ok {
 		return false
 	}
-	ulen := len(v.users)
+	var cmdkeyfl [16]byte
+	copy(cmdkeyfl[:], v.users[idx].Account.(*MemoryAccount).ID.CmdKey())
+	v.aeadDecoderHolder.RemoveUser(cmdkeyfl)
 
-	v.users[idx] = v.users[ulen-1]
-	v.users[ulen-1] = nil
-	v.users = v.users[:ulen-1]
+	last := len(v.users) - 1
+	delete(v.index, email)
+	if idx != last {
+		v.users[idx] = v.users[last]
+		v.index[strings.ToLower(v.users[idx].Email)] = idx
+	}
+	v.users[last] = nil
+	v.users = v.users[:last]
 
 	return true
 }
