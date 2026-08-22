@@ -51,6 +51,21 @@ func toClassPolicies(in []*ClassPolicy) []*protocol.ClassPolicy {
 	return out
 }
 
+// GetStatus 把调度器运行态原样报出去。只读，不抢 recompute 的锁。
+func (s *fairShareServer) GetStatus(ctx context.Context, req *GetStatusRequest) (*GetStatusResponse, error) {
+	st := protocol.FairScheduler().Status()
+	return &GetStatusResponse{
+		RootCapBytePerSec:       st.RootCapBytePerSec,
+		Congested:               st.Congested,
+		ActiveMembers:           st.ActiveMembers,
+		FillTruncated:           st.FillTruncated,
+		FillUnresolvedMembers:   st.FillUnresolved,
+		FillTruncatedTicks:      st.FillTruncatedTicks,
+		FillTruncatedTotalTicks: st.FillTruncatedTotal,
+		FillRounds:              st.FillRounds,
+	}, nil
+}
+
 func (s *fairShareServer) mustEmbedUnimplementedFairShareServiceServer() {}
 
 type service struct{}

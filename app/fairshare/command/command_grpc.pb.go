@@ -24,6 +24,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	FairShareService_SetNodeBandwidth_FullMethodName = "/xray.app.fairshare.command.FairShareService/SetNodeBandwidth"
 	FairShareService_SetClassPolicy_FullMethodName   = "/xray.app.fairshare.command.FairShareService/SetClassPolicy"
+	FairShareService_GetStatus_FullMethodName        = "/xray.app.fairshare.command.FairShareService/GetStatus"
 )
 
 // FairShareServiceClient is the client API for FairShareService service.
@@ -36,6 +37,10 @@ type FairShareServiceClient interface {
 	// SetClassPolicy 整份替换 class（=SKU）策略表。声明式：没出现在请求里的 class 即被删除。
 	// 不另造通道——class 权重、normal_cap、突发信用全走这一个 rpc（FR-079e）。
 	SetClassPolicy(ctx context.Context, in *SetClassPolicyRequest, opts ...grpc.CallOption) (*SetClassPolicyResponse, error)
+	// GetStatus 读调度器运行态。存在的理由是回答运维在「这台节点分配看起来不太对」
+	// 时会问的问题——尤其是注水截断，它只表现为「分配有点不公平」，
+	// 不暴露出来就没有任何线索指向它。
+	GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*GetStatusResponse, error)
 }
 
 type fairShareServiceClient struct {
@@ -66,6 +71,16 @@ func (c *fairShareServiceClient) SetClassPolicy(ctx context.Context, in *SetClas
 	return out, nil
 }
 
+func (c *fairShareServiceClient) GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*GetStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetStatusResponse)
+	err := c.cc.Invoke(ctx, FairShareService_GetStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FairShareServiceServer is the server API for FairShareService service.
 // All implementations must embed UnimplementedFairShareServiceServer
 // for forward compatibility.
@@ -76,6 +91,10 @@ type FairShareServiceServer interface {
 	// SetClassPolicy 整份替换 class（=SKU）策略表。声明式：没出现在请求里的 class 即被删除。
 	// 不另造通道——class 权重、normal_cap、突发信用全走这一个 rpc（FR-079e）。
 	SetClassPolicy(context.Context, *SetClassPolicyRequest) (*SetClassPolicyResponse, error)
+	// GetStatus 读调度器运行态。存在的理由是回答运维在「这台节点分配看起来不太对」
+	// 时会问的问题——尤其是注水截断，它只表现为「分配有点不公平」，
+	// 不暴露出来就没有任何线索指向它。
+	GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error)
 	mustEmbedUnimplementedFairShareServiceServer()
 }
 
@@ -91,6 +110,9 @@ func (UnimplementedFairShareServiceServer) SetNodeBandwidth(context.Context, *Se
 }
 func (UnimplementedFairShareServiceServer) SetClassPolicy(context.Context, *SetClassPolicyRequest) (*SetClassPolicyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetClassPolicy not implemented")
+}
+func (UnimplementedFairShareServiceServer) GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetStatus not implemented")
 }
 func (UnimplementedFairShareServiceServer) mustEmbedUnimplementedFairShareServiceServer() {}
 func (UnimplementedFairShareServiceServer) testEmbeddedByValue()                          {}
@@ -149,6 +171,24 @@ func _FairShareService_SetClassPolicy_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FairShareService_GetStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FairShareServiceServer).GetStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FairShareService_GetStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FairShareServiceServer).GetStatus(ctx, req.(*GetStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // FairShareService_ServiceDesc is the grpc.ServiceDesc for FairShareService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -163,6 +203,10 @@ var FairShareService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetClassPolicy",
 			Handler:    _FairShareService_SetClassPolicy_Handler,
+		},
+		{
+			MethodName: "GetStatus",
+			Handler:    _FairShareService_GetStatus_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -1,10 +1,12 @@
 package protocol
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/xtls/xray-core/common/errors"
 	"golang.org/x/time/rate"
 )
 
@@ -63,6 +65,15 @@ type NodeFairScheduler struct {
 
 	congested      bool // mu
 	belowExitTicks int  // mu
+
+	// 注水截断的运行态。用原子量存，是为了让 Status() 不必去抢 recompute 的锁
+	// ——运维查状态不该有机会拖慢转发。
+	fillTruncated      atomic.Bool   // 最近一 tick 是否截断
+	fillRounds         atomic.Uint32 // 最近一 tick 实际用了几轮
+	fillUnresolved     atomic.Uint32 // 截断时还有多少成员没轮到（被一次分完的那批）
+	fillTruncatedTicks atomic.Uint64 // 已连续截断多少 tick（0 = 当前没截断）
+	fillTruncatedTotal atomic.Uint64 // 进程启动以来累计截断了多少 tick
+	activeMembers      atomic.Uint32 // 最近一 tick 的活跃成员数（截断数字的分母）
 
 	started atomic.Bool // 后台 recompute goroutine 是否已启动（懒启动）
 }
@@ -139,7 +150,18 @@ const (
 	// 注水轮数上限。正常两三轮收敛（每轮至少钉住一个成员）；成员极多且天花板各不
 	// 相同时最坏是 O(N) 轮，5 万成员会把 1 秒的 tick 跑穿。截断后把余下的池子按权重
 	// 一次分完 —— 少数几个本可以再钉住的成员分到略多一点，公平性误差远小于跑不完。
+	//
+	// **故意不做成可配置的。** 想调低它是为了省 CPU，但真正的成本来自成员数而不是
+	// 轮数（5 万成员 8 轮约 40 万次比较，离 1 秒的预算差着两个数量级），调低救不了
+	// 慢机器；想调高是为了公平精度，可正常两三轮就收敛了，调高什么也买不到。
+	// 与其开一个没人知道该填什么的旋钮，不如把截断本身暴露出来（见 FairShareStatus）
+	// ——真有一天它天天在截断，那时候拿着数字再决定，比现在猜一个数强。
 	fairFillMaxRounds = 8
+
+	// 截断持续时的复述间隔（tick）。截断只在**进入/退出**时各记一行日志，
+	// 否则每秒一行就成了另一种「没人看」；但一直截断下去日志里又会什么都没有，
+	// 所以每 5 分钟复述一次，带上已经持续多久。
+	fairTruncationRestateTicks = 300
 
 	// 惰性清理：连续 10 分钟（600 tick）零字节且零连接的成员移除。
 	fairMemberExpireTicks = 600
@@ -378,6 +400,8 @@ func (s *NodeFairScheduler) recompute() {
 
 	if len(active) == 0 || !congested {
 		// 不挤就不削速（FR-076）：每人跑自己的天花板。
+		// 这一 tick 没跑注水，截断状态也要归位，否则「退出截断」那行日志永远不会出现。
+		s.noteFill(false, 0, 0, len(active))
 		for _, m := range s.members {
 			s.setLimit(m, s.ceilingFor(m, root))
 		}
@@ -499,33 +523,49 @@ func (s *NodeFairScheduler) fill(active []*fairMember, root uint64) {
 	}
 
 	constrained := false
+	truncated := false
+	rounds := 0
+	unresolved := 0
 	for round := 0; ; round++ {
+		rounds = round
 		var totalWeight uint64
+		unresolved = 0
 		for _, m := range active {
 			if !m.pinned {
 				totalWeight += m.weight
+				unresolved++
 			}
 		}
 		if totalWeight == 0 {
 			break
 		}
 		if round >= fairFillMaxRounds {
+			// 轮数用完还没收敛：把余下的池子按权重一次分完。总额仍然守得住，
+			// 只是本可以再钉住的那几个成员会分到略多一点。
+			// 这件事必须被看见 —— 运维只看到「分配有点不公平」，是查不出来的。
 			splitRemainder(active, pool, totalWeight)
 			constrained = true
+			truncated = true
 			break
 		}
+		// 一轮之内所有人对着**同一个** (pool, totalWeight) 快照判定，钉住之后
+		// 再一次性扣掉。边判边扣的话，同一轮里排在后面的成员看到的池子更小，
+		// 而 active 是从 map 里遍历出来的、顺序每 tick 都不一样 ——
+		// 同样的节点状态会算出不同的分配，抖动还查不出原因。
 		progressed := false
+		var consumed uint64
 		for _, m := range active {
 			if m.pinned {
 				continue
 			}
 			if share := m.floor + pool*m.weight/totalWeight; m.want <= share {
 				m.alloc = m.want
-				pool -= m.want - m.floor
+				consumed += m.want - m.floor
 				m.pinned = true
 				progressed = true
 			}
 		}
+		pool -= consumed
 		if !progressed {
 			// 无人新饱和 → 剩下的按权重分完，这一步就是「被压住」。
 			splitRemainder(active, pool, totalWeight)
@@ -533,6 +573,7 @@ func (s *NodeFairScheduler) fill(active []*fairMember, root uint64) {
 			break
 		}
 	}
+	s.noteFill(truncated, rounds, unresolved, len(active))
 
 	if !constrained {
 		// 谁也没被压住 —— 节点其实不挤，别拿上一 tick 的实测吞吐把人钉死，
@@ -640,4 +681,81 @@ func (s *NodeFairScheduler) setLimit(m *fairMember, bps uint64) {
 	m.upLimiter.SetBurst(burst)
 	m.downLimiter.SetLimit(lim)
 	m.downLimiter.SetBurst(burst)
+}
+
+// FairShareStatus 是调度器的运行态快照。它存在的唯一理由是回答运维在
+// 「为什么这台节点的分配看起来不太对」时会问的问题，尤其是注水截断——
+// 截断只表现为「分配有点不公平」，不暴露出来的话，没有任何线索指向它，
+// 运维会去查调度器逻辑，查半天查不出来。
+//
+// 日志里有、没人看，等于没有；每 tick 刷一行，也等于没有。所以截断走两条路：
+// 日志只在进入/退出时各记一行（外加每 5 分钟复述一次持续时长），
+// 而完整数字随时可以从这里读走。
+type FairShareStatus struct {
+	RootCapBytePerSec uint64 // 节点整形上限；0 = 节点级公平没开
+	Congested         bool   // 当前是否处于公平模式（不拥塞时根本不削速）
+	ActiveMembers     uint32 // 最近一 tick 的活跃成员数
+
+	// 以下四个回答运维关于注水截断的三个问题。
+	FillTruncated      bool   // 这一 tick 截断了吗
+	FillUnresolved     uint32 // 截断时还有多少成员没轮到（在 ActiveMembers 里的占比才是重点）
+	FillTruncatedTicks uint64 // 已经连续截断多少 tick（1 tick = 1 秒）；0 = 当前没截断
+	FillTruncatedTotal uint64 // 进程启动以来累计截断了多少 tick
+	// FillRounds 是最近一 tick **完成了几轮**注水（每轮钉住若干成员）。
+	// 0 = 第一轮就没人被钉住、直接按权重分完（同质成员的常态）；
+	// 等于 fairFillMaxRounds = 撞顶截断。两头都一眼可分。
+	FillRounds uint32
+}
+
+// Status 返回运行态快照。全走原子读，不抢 recompute 的锁——
+// 运维查状态不该有机会拖慢转发。
+func (s *NodeFairScheduler) Status() FairShareStatus {
+	st := FairShareStatus{
+		RootCapBytePerSec:  s.rootCapBytePerSec.Load(),
+		ActiveMembers:      s.activeMembers.Load(),
+		FillTruncated:      s.fillTruncated.Load(),
+		FillUnresolved:     s.fillUnresolved.Load(),
+		FillTruncatedTicks: s.fillTruncatedTicks.Load(),
+		FillTruncatedTotal: s.fillTruncatedTotal.Load(),
+		FillRounds:         s.fillRounds.Load(),
+	}
+	s.mu.Lock()
+	st.Congested = s.congested
+	s.mu.Unlock()
+	return st
+}
+
+// noteFill 记下这一 tick 注水的结果，并在**状态翻转时**记一行日志。
+//
+// 为什么不是每 tick 一行：5 万成员的节点一旦持续截断，那就是每秒一行、
+// 一天 86400 行，运维会把它当噪音过滤掉——那等于另一种「没人看」。
+// 为什么不是只在翻转时记：持续几小时的截断在日志里只有开头那一行，
+// 事后翻日志的人很容易错过。所以持续期间每 fairTruncationRestateTicks 复述一次，
+// 且带上「已经持续多久」。
+func (s *NodeFairScheduler) noteFill(truncated bool, rounds, unresolved, active int) {
+	s.fillRounds.Store(uint32(rounds))
+	s.activeMembers.Store(uint32(active))
+
+	if !truncated {
+		s.fillUnresolved.Store(0)
+		if s.fillTruncated.Swap(false) {
+			held := s.fillTruncatedTicks.Swap(0)
+			errors.LogInfo(context.Background(),
+				"node fair share: 注水不再截断，本次持续了 ", held, " 秒；",
+				"累计截断 ", s.fillTruncatedTotal.Load(), " 秒")
+		}
+		return
+	}
+
+	s.fillUnresolved.Store(uint32(unresolved))
+	s.fillTruncatedTotal.Add(1)
+	held := s.fillTruncatedTicks.Add(1)
+	first := !s.fillTruncated.Swap(true)
+
+	if first || held%fairTruncationRestateTicks == 0 {
+		errors.LogWarning(context.Background(),
+			"node fair share: 注水在 ", rounds, " 轮（上限 ", fairFillMaxRounds,
+			"）后截断，", unresolved, "/", active, " 个活跃成员没轮到、按权重一次分完；",
+			"已持续 ", held, " 秒。总额仍不超过 root_cap，但这批成员之间的公平性是近似的。")
+	}
 }

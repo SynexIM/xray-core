@@ -76,3 +76,34 @@ func TestSetClassPolicyMapsFieldsAndReplacesWholeTable(t *testing.T) {
 		t.Errorf("short 应被更新为 weight 2，got %+v", p)
 	}
 }
+
+// GetStatus 是运维查「这台节点分配看起来不太对」的入口。
+// 字段错位比没有这个接口更糟——运维会照着错的数字去查。
+func TestGetStatusMapsSchedulerState(t *testing.T) {
+	s := NewFairShareServer()
+	sched := protocol.FairScheduler()
+	t.Cleanup(func() { sched.SetNodeBandwidth(0) })
+
+	if _, err := s.SetNodeBandwidth(context.Background(), &SetNodeBandwidthRequest{AvailBps: 60_000_000}); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := s.GetStatus(context.Background(), &GetStatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.GetRootCapBytePerSec(); got != 60_000_000 {
+		t.Errorf("root_cap 没报对：want 60000000, got %d", got)
+	}
+
+	// 截断状态直接对着调度器的快照比，字段错位一眼就红。
+	st := sched.Status()
+	if resp.GetCongested() != st.Congested ||
+		resp.GetActiveMembers() != st.ActiveMembers ||
+		resp.GetFillTruncated() != st.FillTruncated ||
+		resp.GetFillUnresolvedMembers() != st.FillUnresolved ||
+		resp.GetFillTruncatedTicks() != st.FillTruncatedTicks ||
+		resp.GetFillTruncatedTotalTicks() != st.FillTruncatedTotal ||
+		resp.GetFillRounds() != st.FillRounds {
+		t.Errorf("字段错位：resp=%+v scheduler=%+v", resp, st)
+	}
+}

@@ -16,6 +16,11 @@ service FairShareService {
   // SetClassPolicy 整份替换 class（=SKU）策略表。声明式：没出现在请求里的 class 即被删除。
   // 不另造通道——class 权重、normal_cap、突发信用全走这一个 rpc（FR-079e）。
   rpc SetClassPolicy(SetClassPolicyRequest) returns (SetClassPolicyResponse) {}
+
+  // GetStatus 读调度器运行态。存在的理由是回答运维在「这台节点分配看起来不太对」
+  // 时会问的问题——尤其是注水截断，它只表现为「分配有点不公平」，
+  // 不暴露出来就没有任何线索指向它。
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse) {}
 }
 
 // ⚠️ 单位陷阱（FR-079d）：本文件里的 `_bps` 后缀一律是 **字节/秒**，
@@ -69,6 +74,23 @@ message SetClassPolicyRequest {
 }
 
 message SetClassPolicyResponse {}
+
+message GetStatusRequest {}
+
+message GetStatusResponse {
+  uint64 root_cap_byte_per_sec = 1; // 节点整形上限；0 = 节点级公平没开
+  bool congested = 2;               // 当前是否处于公平模式（不拥塞时根本不削速）
+  uint32 active_members = 3;        // 最近一 tick 的活跃成员数
+
+  // 注水截断（成员极多且天花板各不相同时，轮数用完还没收敛，余下按权重一次分完）。
+  // 总额仍不超过 root_cap，但那批成员之间的公平性是近似的。
+  // 这四个字段回答运维的三个问题：这一 tick 截断了吗 · 还剩多少成员没轮到 · 持续多久了。
+  bool fill_truncated = 4;
+  uint32 fill_unresolved_members = 5; // 在 active_members 里的占比才是重点
+  uint64 fill_truncated_ticks = 6;    // 已连续截断多少 tick（1 tick = 1 秒）；0 = 当前没截断
+  uint64 fill_truncated_total_ticks = 7; // 进程启动以来累计
+  uint32 fill_rounds = 8;             // 最近一 tick 实际跑了几轮；等于上限就是撞顶了
+}
 
 // Config 命令服务配置（gRPC server 经 RegisterConfig 实例化本服务）。
 message Config {}

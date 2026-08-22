@@ -328,6 +328,145 @@ func (*SetClassPolicyResponse) Descriptor() ([]byte, []int) {
 	return file_app_fairshare_command_command_proto_rawDescGZIP(), []int{4}
 }
 
+type GetStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetStatusRequest) Reset() {
+	*x = GetStatusRequest{}
+	mi := &file_app_fairshare_command_command_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetStatusRequest) ProtoMessage() {}
+
+func (x *GetStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_app_fairshare_command_command_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetStatusRequest.ProtoReflect.Descriptor instead.
+func (*GetStatusRequest) Descriptor() ([]byte, []int) {
+	return file_app_fairshare_command_command_proto_rawDescGZIP(), []int{5}
+}
+
+type GetStatusResponse struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	RootCapBytePerSec uint64                 `protobuf:"varint,1,opt,name=root_cap_byte_per_sec,json=rootCapBytePerSec,proto3" json:"root_cap_byte_per_sec,omitempty"` // 节点整形上限；0 = 节点级公平没开
+	Congested         bool                   `protobuf:"varint,2,opt,name=congested,proto3" json:"congested,omitempty"`                                                // 当前是否处于公平模式（不拥塞时根本不削速）
+	ActiveMembers     uint32                 `protobuf:"varint,3,opt,name=active_members,json=activeMembers,proto3" json:"active_members,omitempty"`                   // 最近一 tick 的活跃成员数
+	// 注水截断（成员极多且天花板各不相同时，轮数用完还没收敛，余下按权重一次分完）。
+	// 总额仍不超过 root_cap，但那批成员之间的公平性是近似的。
+	// 这四个字段回答运维的三个问题：这一 tick 截断了吗 · 还剩多少成员没轮到 · 持续多久了。
+	FillTruncated           bool   `protobuf:"varint,4,opt,name=fill_truncated,json=fillTruncated,proto3" json:"fill_truncated,omitempty"`
+	FillUnresolvedMembers   uint32 `protobuf:"varint,5,opt,name=fill_unresolved_members,json=fillUnresolvedMembers,proto3" json:"fill_unresolved_members,omitempty"`         // 在 active_members 里的占比才是重点
+	FillTruncatedTicks      uint64 `protobuf:"varint,6,opt,name=fill_truncated_ticks,json=fillTruncatedTicks,proto3" json:"fill_truncated_ticks,omitempty"`                  // 已连续截断多少 tick（1 tick = 1 秒）；0 = 当前没截断
+	FillTruncatedTotalTicks uint64 `protobuf:"varint,7,opt,name=fill_truncated_total_ticks,json=fillTruncatedTotalTicks,proto3" json:"fill_truncated_total_ticks,omitempty"` // 进程启动以来累计
+	FillRounds              uint32 `protobuf:"varint,8,opt,name=fill_rounds,json=fillRounds,proto3" json:"fill_rounds,omitempty"`                                            // 最近一 tick 实际跑了几轮；等于上限就是撞顶了
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *GetStatusResponse) Reset() {
+	*x = GetStatusResponse{}
+	mi := &file_app_fairshare_command_command_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetStatusResponse) ProtoMessage() {}
+
+func (x *GetStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_app_fairshare_command_command_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetStatusResponse.ProtoReflect.Descriptor instead.
+func (*GetStatusResponse) Descriptor() ([]byte, []int) {
+	return file_app_fairshare_command_command_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *GetStatusResponse) GetRootCapBytePerSec() uint64 {
+	if x != nil {
+		return x.RootCapBytePerSec
+	}
+	return 0
+}
+
+func (x *GetStatusResponse) GetCongested() bool {
+	if x != nil {
+		return x.Congested
+	}
+	return false
+}
+
+func (x *GetStatusResponse) GetActiveMembers() uint32 {
+	if x != nil {
+		return x.ActiveMembers
+	}
+	return 0
+}
+
+func (x *GetStatusResponse) GetFillTruncated() bool {
+	if x != nil {
+		return x.FillTruncated
+	}
+	return false
+}
+
+func (x *GetStatusResponse) GetFillUnresolvedMembers() uint32 {
+	if x != nil {
+		return x.FillUnresolvedMembers
+	}
+	return 0
+}
+
+func (x *GetStatusResponse) GetFillTruncatedTicks() uint64 {
+	if x != nil {
+		return x.FillTruncatedTicks
+	}
+	return 0
+}
+
+func (x *GetStatusResponse) GetFillTruncatedTotalTicks() uint64 {
+	if x != nil {
+		return x.FillTruncatedTotalTicks
+	}
+	return 0
+}
+
+func (x *GetStatusResponse) GetFillRounds() uint32 {
+	if x != nil {
+		return x.FillRounds
+	}
+	return 0
+}
+
 // Config 命令服务配置（gRPC server 经 RegisterConfig 实例化本服务）。
 type Config struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -337,7 +476,7 @@ type Config struct {
 
 func (x *Config) Reset() {
 	*x = Config{}
-	mi := &file_app_fairshare_command_command_proto_msgTypes[5]
+	mi := &file_app_fairshare_command_command_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -349,7 +488,7 @@ func (x *Config) String() string {
 func (*Config) ProtoMessage() {}
 
 func (x *Config) ProtoReflect() protoreflect.Message {
-	mi := &file_app_fairshare_command_command_proto_msgTypes[5]
+	mi := &file_app_fairshare_command_command_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -362,7 +501,7 @@ func (x *Config) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Config.ProtoReflect.Descriptor instead.
 func (*Config) Descriptor() ([]byte, []int) {
-	return file_app_fairshare_command_command_proto_rawDescGZIP(), []int{5}
+	return file_app_fairshare_command_command_proto_rawDescGZIP(), []int{7}
 }
 
 var File_app_fairshare_command_command_proto protoreflect.FileDescriptor
@@ -387,11 +526,23 @@ const file_app_fairshare_command_command_proto_rawDesc = "" +
 	"\x13floor_ratio_percent\x18\x06 \x01(\rR\x11floorRatioPercent\"Z\n" +
 	"\x15SetClassPolicyRequest\x12A\n" +
 	"\aclasses\x18\x01 \x03(\v2'.xray.app.fairshare.command.ClassPolicyR\aclasses\"\x18\n" +
-	"\x16SetClassPolicyResponse\"\b\n" +
-	"\x06Config2\x8e\x02\n" +
+	"\x16SetClassPolicyResponse\"\x12\n" +
+	"\x10GetStatusRequest\"\xf9\x02\n" +
+	"\x11GetStatusResponse\x120\n" +
+	"\x15root_cap_byte_per_sec\x18\x01 \x01(\x04R\x11rootCapBytePerSec\x12\x1c\n" +
+	"\tcongested\x18\x02 \x01(\bR\tcongested\x12%\n" +
+	"\x0eactive_members\x18\x03 \x01(\rR\ractiveMembers\x12%\n" +
+	"\x0efill_truncated\x18\x04 \x01(\bR\rfillTruncated\x126\n" +
+	"\x17fill_unresolved_members\x18\x05 \x01(\rR\x15fillUnresolvedMembers\x120\n" +
+	"\x14fill_truncated_ticks\x18\x06 \x01(\x04R\x12fillTruncatedTicks\x12;\n" +
+	"\x1afill_truncated_total_ticks\x18\a \x01(\x04R\x17fillTruncatedTotalTicks\x12\x1f\n" +
+	"\vfill_rounds\x18\b \x01(\rR\n" +
+	"fillRounds\"\b\n" +
+	"\x06Config2\xfa\x02\n" +
 	"\x10FairShareService\x12\x7f\n" +
 	"\x10SetNodeBandwidth\x123.xray.app.fairshare.command.SetNodeBandwidthRequest\x1a4.xray.app.fairshare.command.SetNodeBandwidthResponse\"\x00\x12y\n" +
-	"\x0eSetClassPolicy\x121.xray.app.fairshare.command.SetClassPolicyRequest\x1a2.xray.app.fairshare.command.SetClassPolicyResponse\"\x00Bp\n" +
+	"\x0eSetClassPolicy\x121.xray.app.fairshare.command.SetClassPolicyRequest\x1a2.xray.app.fairshare.command.SetClassPolicyResponse\"\x00\x12j\n" +
+	"\tGetStatus\x12,.xray.app.fairshare.command.GetStatusRequest\x1a-.xray.app.fairshare.command.GetStatusResponse\"\x00Bp\n" +
 	"\x1ecom.xray.app.fairshare.commandP\x01Z/github.com/xtls/xray-core/app/fairshare/command\xaa\x02\x1aXray.App.FairShare.Commandb\x06proto3"
 
 var (
@@ -406,23 +557,27 @@ func file_app_fairshare_command_command_proto_rawDescGZIP() []byte {
 	return file_app_fairshare_command_command_proto_rawDescData
 }
 
-var file_app_fairshare_command_command_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_app_fairshare_command_command_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_app_fairshare_command_command_proto_goTypes = []any{
 	(*SetNodeBandwidthRequest)(nil),  // 0: xray.app.fairshare.command.SetNodeBandwidthRequest
 	(*SetNodeBandwidthResponse)(nil), // 1: xray.app.fairshare.command.SetNodeBandwidthResponse
 	(*ClassPolicy)(nil),              // 2: xray.app.fairshare.command.ClassPolicy
 	(*SetClassPolicyRequest)(nil),    // 3: xray.app.fairshare.command.SetClassPolicyRequest
 	(*SetClassPolicyResponse)(nil),   // 4: xray.app.fairshare.command.SetClassPolicyResponse
-	(*Config)(nil),                   // 5: xray.app.fairshare.command.Config
+	(*GetStatusRequest)(nil),         // 5: xray.app.fairshare.command.GetStatusRequest
+	(*GetStatusResponse)(nil),        // 6: xray.app.fairshare.command.GetStatusResponse
+	(*Config)(nil),                   // 7: xray.app.fairshare.command.Config
 }
 var file_app_fairshare_command_command_proto_depIdxs = []int32{
 	2, // 0: xray.app.fairshare.command.SetClassPolicyRequest.classes:type_name -> xray.app.fairshare.command.ClassPolicy
 	0, // 1: xray.app.fairshare.command.FairShareService.SetNodeBandwidth:input_type -> xray.app.fairshare.command.SetNodeBandwidthRequest
 	3, // 2: xray.app.fairshare.command.FairShareService.SetClassPolicy:input_type -> xray.app.fairshare.command.SetClassPolicyRequest
-	1, // 3: xray.app.fairshare.command.FairShareService.SetNodeBandwidth:output_type -> xray.app.fairshare.command.SetNodeBandwidthResponse
-	4, // 4: xray.app.fairshare.command.FairShareService.SetClassPolicy:output_type -> xray.app.fairshare.command.SetClassPolicyResponse
-	3, // [3:5] is the sub-list for method output_type
-	1, // [1:3] is the sub-list for method input_type
+	5, // 3: xray.app.fairshare.command.FairShareService.GetStatus:input_type -> xray.app.fairshare.command.GetStatusRequest
+	1, // 4: xray.app.fairshare.command.FairShareService.SetNodeBandwidth:output_type -> xray.app.fairshare.command.SetNodeBandwidthResponse
+	4, // 5: xray.app.fairshare.command.FairShareService.SetClassPolicy:output_type -> xray.app.fairshare.command.SetClassPolicyResponse
+	6, // 6: xray.app.fairshare.command.FairShareService.GetStatus:output_type -> xray.app.fairshare.command.GetStatusResponse
+	4, // [4:7] is the sub-list for method output_type
+	1, // [1:4] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
 	1, // [1:1] is the sub-list for extension extendee
 	0, // [0:1] is the sub-list for field type_name
@@ -439,7 +594,7 @@ func file_app_fairshare_command_command_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_app_fairshare_command_command_proto_rawDesc), len(file_app_fairshare_command_command_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
