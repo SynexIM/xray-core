@@ -105,6 +105,7 @@ func (d *RelayDestination) ToMemoryUser() *protocol.MemoryUser {
 		ConnLimit:           d.ConnLimit,
 		CommittedBps:        d.CommittedBps,
 		CommittedBurstBytes: d.CommittedBurstBytes,
+		Class:               d.Class,
 	}
 }
 

@@ -36,6 +36,10 @@ message UserAccount {
   // and committed_burst_bytes the CBS. 0 keeps plain single-rate behaviour.
   uint64 committed_bps = 5;
   uint64 committed_burst_bytes = 6;
+
+  // class 是争抢等级名（= SKU）。权重 / normal_cap / 突发信用是运营参数，
+  // 走 app.fairshare.command 的 SetClassPolicy 整份下发，这里只带一个名字。
+  string class = 7;
 }
 
 // ServerConfig is the protobuf config for Socks server.

@@ -32,10 +32,11 @@ import (
 )
 
 const (
-	wantBps  = uint64(12_500_000) // PIR 100 Mbps
-	wantConn = uint32(8)
-	wantCIR  = uint64(2_500_000)  // CIR 20 Mbps
-	wantCBS  = uint64(50_000_000) // CBS 50 MB
+	wantBps   = uint64(12_500_000) // PIR 100 Mbps
+	wantConn  = uint32(8)
+	wantCIR   = uint64(2_500_000)  // CIR 20 Mbps
+	wantCBS   = uint64(50_000_000) // CBS 50 MB
+	wantClass = "live"             // class（= SKU），拥塞时按它的 weight 争抢
 )
 
 // usersOf 把各协议 Build 出来的配置拆出用户列表。
@@ -68,6 +69,7 @@ func usersOf(t *testing.T, msg proto.Message) []*protocol.User {
 				ConnLimit:           mu.ConnLimit,
 				CommittedBps:        mu.CommittedBps,
 				CommittedBurstBytes: mu.CommittedBurstBytes,
+				Class:               mu.Class,
 				// relay 的用户身份就是 PSK，本来不经过 protocol.User。补一个
 				// account 只是为了让下面 ToMemoryUser 那条断言跑得起来
 				// （它要求 account 非空），限速字段与它无关。
@@ -94,31 +96,31 @@ var protocols = []struct {
 }{
 	{
 		name:       "vless",
-		withLimits: `{"clients":[{"id":"27848739-7e62-4138-9fd3-098a63964b6b","email":"a@b","bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000}],"decryption":"none"}`,
+		withLimits: `{"clients":[{"id":"27848739-7e62-4138-9fd3-098a63964b6b","email":"a@b","bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000,"class":"live"}],"decryption":"none"}`,
 		without:    `{"clients":[{"id":"27848739-7e62-4138-9fd3-098a63964b6b","email":"a@b"}],"decryption":"none"}`,
 		build:      func(raw string) (proto.Message, error) { return buildInto(raw, new(conf.VLessInboundConfig)) },
 	},
 	{
 		name:       "vmess",
-		withLimits: `{"clients":[{"id":"27848739-7e62-4138-9fd3-098a63964b6b","email":"a@b","bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000}]}`,
+		withLimits: `{"clients":[{"id":"27848739-7e62-4138-9fd3-098a63964b6b","email":"a@b","bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000,"class":"live"}]}`,
 		without:    `{"clients":[{"id":"27848739-7e62-4138-9fd3-098a63964b6b","email":"a@b"}]}`,
 		build:      func(raw string) (proto.Message, error) { return buildInto(raw, new(conf.VMessInboundConfig)) },
 	},
 	{
 		name:       "trojan",
-		withLimits: `{"clients":[{"password":"pw","email":"a@b","bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000}]}`,
+		withLimits: `{"clients":[{"password":"pw","email":"a@b","bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000,"class":"live"}]}`,
 		without:    `{"clients":[{"password":"pw","email":"a@b"}]}`,
 		build:      func(raw string) (proto.Message, error) { return buildInto(raw, new(conf.TrojanServerConfig)) },
 	},
 	{
 		name:       "shadowsocks-单用户",
-		withLimits: `{"method":"aes-128-gcm","password":"pw","email":"a@b","bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000}`,
+		withLimits: `{"method":"aes-128-gcm","password":"pw","email":"a@b","bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000,"class":"live"}`,
 		without:    `{"method":"aes-128-gcm","password":"pw","email":"a@b"}`,
 		build:      func(raw string) (proto.Message, error) { return buildInto(raw, new(conf.ShadowsocksServerConfig)) },
 	},
 	{
 		name:       "shadowsocks-多用户",
-		withLimits: `{"clients":[{"method":"aes-128-gcm","password":"pw","email":"a@b","bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000}]}`,
+		withLimits: `{"clients":[{"method":"aes-128-gcm","password":"pw","email":"a@b","bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000,"class":"live"}]}`,
 		without:    `{"clients":[{"method":"aes-128-gcm","password":"pw","email":"a@b"}]}`,
 		build:      func(raw string) (proto.Message, error) { return buildInto(raw, new(conf.ShadowsocksServerConfig)) },
 	},
@@ -126,7 +128,7 @@ var protocols = []struct {
 		// ss2022 多用户走的是 buildShadowsocks2022 这条独立分支，
 		// 跟上面那两个 shadowsocks 用例不是同一段代码，所以要单独测。
 		name:       "shadowsocks-2022-多用户",
-		withLimits: `{"method":"2022-blake3-aes-128-gcm","password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","clients":[{"password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","email":"a@b","bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000}]}`,
+		withLimits: `{"method":"2022-blake3-aes-128-gcm","password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","clients":[{"password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","email":"a@b","bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000,"class":"live"}]}`,
 		without:    `{"method":"2022-blake3-aes-128-gcm","password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","clients":[{"password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","email":"a@b"}]}`,
 		build:      func(raw string) (proto.Message, error) { return buildInto(raw, new(conf.ShadowsocksServerConfig)) },
 	},
@@ -135,13 +137,13 @@ var protocols = []struct {
 		// 走 RelayServerConfig，用户变成 RelayDestination——那上面此前**一个限速
 		// 字段都没有**，走 relay 的客户设什么限速都被静默丢掉。
 		name:       "shadowsocks-2022-relay",
-		withLimits: `{"method":"2022-blake3-aes-128-gcm","password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","clients":[{"password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","email":"a@b","address":"127.0.0.1","port":1234,"bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000}]}`,
+		withLimits: `{"method":"2022-blake3-aes-128-gcm","password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","clients":[{"password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","email":"a@b","address":"127.0.0.1","port":1234,"bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000,"class":"live"}]}`,
 		without:    `{"method":"2022-blake3-aes-128-gcm","password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","clients":[{"password":"IdG0eY+zbGDpTEBGKcCSXpuMXNiPUFcbZTHDWbBGb5w=","email":"a@b","address":"127.0.0.1","port":1234}]}`,
 		build:      func(raw string) (proto.Message, error) { return buildInto(raw, new(conf.ShadowsocksServerConfig)) },
 	},
 	{
 		name:       "hysteria2",
-		withLimits: `{"version":2,"clients":[{"auth":"pw","email":"a@b","bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000}]}`,
+		withLimits: `{"version":2,"clients":[{"auth":"pw","email":"a@b","bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000,"class":"live"}]}`,
 		without:    `{"version":2,"clients":[{"auth":"pw","email":"a@b"}]}`,
 		build:      func(raw string) (proto.Message, error) { return buildInto(raw, new(conf.HysteriaServerConfig)) },
 	},
@@ -186,6 +188,11 @@ func TestEveryProtocolReadsLimits(t *testing.T) {
 					"  后果：突发额度悄悄变成默认的一天承诺量，与合同不符",
 					wantCBS, u.CommittedBurstBytes)
 			}
+			if u.Class != wantClass {
+				t.Errorf("class 被丢弃了：期望 %q，实际 %q\n"+
+					"  后果：这个客户在节点上落回同权重兜底，卖的直播优先级不生效",
+					wantClass, u.Class)
+			}
 		})
 
 		t.Run(p.name+"/不设就是不限", func(t *testing.T) {
@@ -209,6 +216,9 @@ func TestEveryProtocolReadsLimits(t *testing.T) {
 			}
 			if u.CommittedBurstBytes != 0 {
 				t.Errorf("没写突发额度却冒出一个值 %d", u.CommittedBurstBytes)
+			}
+			if u.Class != "" {
+				t.Errorf("没写 class 却冒出一个 %q——未分类用户会被塞进某个 SKU 的权重里", u.Class)
 			}
 		})
 	}
@@ -281,10 +291,11 @@ func TestNoLimitsMeansNoLimiter(t *testing.T) {
 // 所以它们的限速要单独测——上面那张矩阵检查不到这条路径。
 // accLimits 是静态入站账号上那四个限速字段的快照。
 type accLimits struct {
-	Bps  uint64
-	Conn uint32
-	CIR  uint64
-	CBS  uint64
+	Bps   uint64
+	Conn  uint32
+	CIR   uint64
+	CBS   uint64
+	Class string
 }
 
 func TestStaticInboundsReadLimits(t *testing.T) {
@@ -297,26 +308,26 @@ func TestStaticInboundsReadLimits(t *testing.T) {
 	}{
 		{
 			name:    "socks",
-			with:    `{"auth":"password","accounts":[{"user":"u","pass":"p","bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000}]}`,
+			with:    `{"auth":"password","accounts":[{"user":"u","pass":"p","bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000,"class":"live"}]}`,
 			without: `{"auth":"password","accounts":[{"user":"u","pass":"p"}]}`,
 			build:   func(raw string) (proto.Message, error) { return buildInto(raw, new(conf.SocksServerConfig)) },
 			accs: func(m proto.Message) []accLimits {
 				out := []accLimits{}
 				for _, a := range m.(*socks.ServerConfig).UserAccounts {
-					out = append(out, accLimits{a.BandwidthBps, a.ConnLimit, a.CommittedBps, a.CommittedBurstBytes})
+					out = append(out, accLimits{a.BandwidthBps, a.ConnLimit, a.CommittedBps, a.CommittedBurstBytes, a.Class})
 				}
 				return out
 			},
 		},
 		{
 			name:    "http",
-			with:    `{"accounts":[{"user":"u","pass":"p","bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000}]}`,
+			with:    `{"accounts":[{"user":"u","pass":"p","bandwidth_bps":12500000,"conn_limit":8,"committed_bps":2500000,"committed_burst_bytes":50000000,"class":"live"}]}`,
 			without: `{"accounts":[{"user":"u","pass":"p"}]}`,
 			build:   func(raw string) (proto.Message, error) { return buildInto(raw, new(conf.HTTPServerConfig)) },
 			accs: func(m proto.Message) []accLimits {
 				out := []accLimits{}
 				for _, a := range m.(*http.ServerConfig).UserAccounts {
-					out = append(out, accLimits{a.BandwidthBps, a.ConnLimit, a.CommittedBps, a.CommittedBurstBytes})
+					out = append(out, accLimits{a.BandwidthBps, a.ConnLimit, a.CommittedBps, a.CommittedBurstBytes, a.Class})
 				}
 				return out
 			},
@@ -339,6 +350,9 @@ func TestStaticInboundsReadLimits(t *testing.T) {
 			if accs[0].CIR != wantCIR || accs[0].CBS != wantCBS {
 				t.Errorf("双速率被丢弃了：committed=%d burst=%d", accs[0].CIR, accs[0].CBS)
 			}
+			if accs[0].Class != wantClass {
+				t.Errorf("class 被丢弃了：期望 %q，实际 %q", wantClass, accs[0].Class)
+			}
 		})
 
 		t.Run(c.name+"/不设就是不限", func(t *testing.T) {
@@ -355,6 +369,9 @@ func TestStaticInboundsReadLimits(t *testing.T) {
 			}
 			if accs[0].CIR != 0 || accs[0].CBS != 0 {
 				t.Errorf("没写双速率却冒出值：committed=%d burst=%d", accs[0].CIR, accs[0].CBS)
+			}
+			if accs[0].Class != "" {
+				t.Errorf("没写 class 却冒出一个 %q", accs[0].Class)
 			}
 		})
 	}

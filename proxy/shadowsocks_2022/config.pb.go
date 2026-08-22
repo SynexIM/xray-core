@@ -190,8 +190,11 @@ type RelayDestination struct {
 	ConnLimit           uint32 `protobuf:"varint,7,opt,name=conn_limit,json=connLimit,proto3" json:"conn_limit,omitempty"`
 	CommittedBps        uint64 `protobuf:"varint,8,opt,name=committed_bps,json=committedBps,proto3" json:"committed_bps,omitempty"`
 	CommittedBurstBytes uint64 `protobuf:"varint,9,opt,name=committed_burst_bytes,json=committedBurstBytes,proto3" json:"committed_burst_bytes,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// class 是争抢等级名（= SKU）。权重 / normal_cap / 突发信用是运营参数，
+	// 走 app.fairshare.command 的 SetClassPolicy 整份下发，这里只带一个名字。
+	Class         string `protobuf:"bytes,10,opt,name=class,proto3" json:"class,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RelayDestination) Reset() {
@@ -285,6 +288,13 @@ func (x *RelayDestination) GetCommittedBurstBytes() uint64 {
 		return x.CommittedBurstBytes
 	}
 	return 0
+}
+
+func (x *RelayDestination) GetClass() string {
+	if x != nil {
+		return x.Class
+	}
+	return ""
 }
 
 type RelayServerConfig struct {
@@ -482,7 +492,7 @@ const file_proxy_shadowsocks_2022_config_proto_rawDesc = "" +
 	"\x06method\x18\x01 \x01(\tR\x06method\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\tR\x03key\x120\n" +
 	"\x05users\x18\x03 \x03(\v2\x1a.xray.common.protocol.UserR\x05users\x122\n" +
-	"\anetwork\x18\x04 \x03(\x0e2\x18.xray.common.net.NetworkR\anetwork\"\xb8\x02\n" +
+	"\anetwork\x18\x04 \x03(\x0e2\x18.xray.common.net.NetworkR\anetwork\"\xce\x02\n" +
 	"\x10RelayDestination\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x125\n" +
 	"\aaddress\x18\x02 \x01(\v2\x1b.xray.common.net.IPOrDomainR\aaddress\x12\x12\n" +
@@ -493,7 +503,9 @@ const file_proxy_shadowsocks_2022_config_proto_rawDesc = "" +
 	"\n" +
 	"conn_limit\x18\a \x01(\rR\tconnLimit\x12#\n" +
 	"\rcommitted_bps\x18\b \x01(\x04R\fcommittedBps\x122\n" +
-	"\x15committed_burst_bytes\x18\t \x01(\x04R\x13committedBurstBytes\"\xc4\x01\n" +
+	"\x15committed_burst_bytes\x18\t \x01(\x04R\x13committedBurstBytes\x12\x14\n" +
+	"\x05class\x18\n" +
+	" \x01(\tR\x05class\"\xc4\x01\n" +
 	"\x11RelayServerConfig\x12\x16\n" +
 	"\x06method\x18\x01 \x01(\tR\x06method\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\tR\x03key\x12Q\n" +

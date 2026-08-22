@@ -139,8 +139,11 @@ type UserAccount struct {
 	// and committed_burst_bytes the CBS. 0 keeps plain single-rate behaviour.
 	CommittedBps        uint64 `protobuf:"varint,5,opt,name=committed_bps,json=committedBps,proto3" json:"committed_bps,omitempty"`
 	CommittedBurstBytes uint64 `protobuf:"varint,6,opt,name=committed_burst_bytes,json=committedBurstBytes,proto3" json:"committed_burst_bytes,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// class 是争抢等级名（= SKU）。权重 / normal_cap / 突发信用是运营参数，
+	// 走 app.fairshare.command 的 SetClassPolicy 整份下发，这里只带一个名字。
+	Class         string `protobuf:"bytes,7,opt,name=class,proto3" json:"class,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UserAccount) Reset() {
@@ -213,6 +216,13 @@ func (x *UserAccount) GetCommittedBurstBytes() uint64 {
 		return x.CommittedBurstBytes
 	}
 	return 0
+}
+
+func (x *UserAccount) GetClass() string {
+	if x != nil {
+		return x.Class
+	}
+	return ""
 }
 
 // ServerConfig is the protobuf config for Socks server.
@@ -355,7 +365,7 @@ const file_proxy_socks_config_proto_rawDesc = "" +
 	"\x18proxy/socks/config.proto\x12\x10xray.proxy.socks\x1a\x18common/net/address.proto\x1a!common/protocol/server_spec.proto\"A\n" +
 	"\aAccount\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
-	"\bpassword\x18\x02 \x01(\tR\bpassword\"\xe2\x01\n" +
+	"\bpassword\x18\x02 \x01(\tR\bpassword\"\xf8\x01\n" +
 	"\vUserAccount\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
 	"\bpassword\x18\x02 \x01(\tR\bpassword\x12#\n" +
@@ -363,7 +373,8 @@ const file_proxy_socks_config_proto_rawDesc = "" +
 	"\n" +
 	"conn_limit\x18\x04 \x01(\rR\tconnLimit\x12#\n" +
 	"\rcommitted_bps\x18\x05 \x01(\x04R\fcommittedBps\x122\n" +
-	"\x15committed_burst_bytes\x18\x06 \x01(\x04R\x13committedBurstBytes\"\x89\x03\n" +
+	"\x15committed_burst_bytes\x18\x06 \x01(\x04R\x13committedBurstBytes\x12\x14\n" +
+	"\x05class\x18\a \x01(\tR\x05class\"\x89\x03\n" +
 	"\fServerConfig\x127\n" +
 	"\tauth_type\x18\x01 \x01(\x0e2\x1a.xray.proxy.socks.AuthTypeR\bauthType\x12H\n" +
 	"\baccounts\x18\x02 \x03(\v2,.xray.proxy.socks.ServerConfig.AccountsEntryR\baccounts\x125\n" +

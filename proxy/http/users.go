@@ -59,6 +59,7 @@ type LimitedAccount interface {
 	GetConnLimit() uint32
 	GetCommittedBps() uint64
 	GetCommittedBurstBytes() uint64
+	GetClass() string
 }
 
 // NewUserStore builds a store from boot accounts. level is the inbound user
@@ -80,6 +81,7 @@ func NewUserStore[T LimitedAccount](level uint32, accounts map[string]string, us
 			connLimit:           ua.GetConnLimit(),
 			committedBps:        ua.GetCommittedBps(),
 			committedBurstBytes: ua.GetCommittedBurstBytes(),
+			class:               ua.GetClass(),
 		})
 	}
 	return s
@@ -92,6 +94,7 @@ type limits struct {
 	connLimit           uint32
 	committedBps        uint64
 	committedBurstBytes uint64
+	class               string
 }
 
 func (s *UserStore) set(username, password string, l limits) {
@@ -105,6 +108,7 @@ func (s *UserStore) set(username, password string, l limits) {
 		ConnLimit:           l.connLimit,
 		CommittedBps:        l.committedBps,
 		CommittedBurstBytes: l.committedBurstBytes,
+		Class:               l.class,
 	}
 	s.password[username] = password
 	s.emailKey[username] = username

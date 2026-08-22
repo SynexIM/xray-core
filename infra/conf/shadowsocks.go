@@ -44,6 +44,8 @@ type ShadowsocksUserConfig struct {
 	// 突发额度 CBS（字节，留空 = 一天的承诺量）。语义见 protocol.User。
 	CommittedBps        uint64 `json:"committed_bps"`
 	CommittedBurstBytes uint64 `json:"committed_burst_bytes"`
+	// class 是争抢等级名（= SKU），策略表走 fairshare 的 SetClassPolicy 下发。
+	Class string `json:"class"`
 }
 
 type ShadowsocksServerConfig struct {
@@ -62,6 +64,8 @@ type ShadowsocksServerConfig struct {
 	// 突发额度 CBS（字节，留空 = 一天的承诺量）。语义见 protocol.User。
 	CommittedBps        uint64 `json:"committed_bps"`
 	CommittedBurstBytes uint64 `json:"committed_burst_bytes"`
+	// class 是争抢等级名（= SKU），策略表走 fairshare 的 SetClassPolicy 下发。
+	Class string `json:"class"`
 }
 
 func (v *ShadowsocksServerConfig) Build() (proto.Message, error) {
@@ -102,6 +106,7 @@ func (v *ShadowsocksServerConfig) Build() (proto.Message, error) {
 					ConnLimit:           user.ConnLimit,
 					CommittedBps:        user.CommittedBps,
 					CommittedBurstBytes: user.CommittedBurstBytes,
+					Class:               user.Class,
 				}
 				return nil
 			}
@@ -128,6 +133,7 @@ func (v *ShadowsocksServerConfig) Build() (proto.Message, error) {
 			ConnLimit:           v.ConnLimit,
 			CommittedBps:        v.CommittedBps,
 			CommittedBurstBytes: v.CommittedBurstBytes,
+			Class:               v.Class,
 		})
 	}
 
@@ -174,6 +180,7 @@ func buildShadowsocks2022(v *ShadowsocksServerConfig) (proto.Message, error) {
 				ConnLimit:           user.ConnLimit,
 				CommittedBps:        user.CommittedBps,
 				CommittedBurstBytes: user.CommittedBurstBytes,
+				Class:               user.Class,
 			}
 			return nil
 		}
@@ -206,6 +213,7 @@ func buildShadowsocks2022(v *ShadowsocksServerConfig) (proto.Message, error) {
 			ConnLimit:           user.ConnLimit,
 			CommittedBps:        user.CommittedBps,
 			CommittedBurstBytes: user.CommittedBurstBytes,
+			Class:               user.Class,
 		})
 	}
 	return config, nil
