@@ -23,6 +23,11 @@ message User {
   // instead of each protocol re-implementing a RuntimeLimits() account method.
   // 0 means unlimited. Bandwidth + connection cap + fair-share all key off the
   // resulting *MemoryUser, so the dispatcher enforces them with no protocol code.
+  // ⚠️ 单位陷阱（FR-079d）：这里的 `_bps` 是 **比特/秒**（业务单位，面板按 Mbps 展示后 ×1e6）。
+  // 而 app/fairshare/command/command.proto 里的 `_bps` 是 **字节/秒**。同一个后缀差 8 倍。
+  // 唯一的换算点是 common/protocol/user_limits.go 的 bitsPerSecondToRuntimeBytesPerSecond，
+  // 由 common/protocol/node_fairshare_units_test.go 钉死。新增速率字段一律带
+  // `_bit_per_sec` / `_byte_per_sec` 后缀，不许再用裸 `_bps`。
   uint64 bandwidth_bps = 4;
   uint32 conn_limit = 5;
 
@@ -44,4 +49,10 @@ message User {
   // committed_bps above bandwidth_bps is meaningless and is ignored.
   uint64 committed_bps = 6;
   uint64 committed_burst_bytes = 7;
+
+  // class 是这个用户所属的争抢等级（= SKU，如 "live" / "shortvideo"）。
+  // 权重、normal_cap、突发信用不放在这里——它们是运营参数，走
+  // app.fairshare.command 的 SetClassPolicy 整份下发，这里只带一个名字。
+  // 空 = 未分类，落到 class 表里名字为空的那条兜底策略；没有兜底策略就是同权重、无 class 上限。
+  string class = 8;
 }

@@ -39,6 +39,7 @@ func (u *User) ToMemoryUser() (*MemoryUser, error) {
 		ConnLimit:           u.ConnLimit,
 		CommittedBps:        u.CommittedBps,
 		CommittedBurstBytes: u.CommittedBurstBytes,
+		Class:               u.Class,
 	}, nil
 }
 
@@ -53,6 +54,7 @@ func ToProtoUser(mu *MemoryUser) *User {
 		ConnLimit:           mu.ConnLimit,
 		CommittedBps:        mu.CommittedBps,
 		CommittedBurstBytes: mu.CommittedBurstBytes,
+		Class:               mu.Class,
 	}
 	// Account 可以没有：socks/http/mixed 这类静态入站会把用户表示成一个
 	// 只带限速的 MemoryUser，密码另外放。序列化回去时必须容忍这一点，
@@ -75,4 +77,8 @@ type MemoryUser struct {
 	// BandwidthBps 是 PIR，CommittedBps 是 CIR，CommittedBurstBytes 是 CBS。
 	CommittedBps        uint64
 	CommittedBurstBytes uint64
+
+	// Class 是争抢等级名（= SKU）。策略表（weight / normal_cap / 突发信用）不在这里，
+	// 走 NodeFairScheduler.SetClassPolicies 整份下发，见 node_fairshare.go。
+	Class string
 }

@@ -10,7 +10,7 @@ import (
 // FairLimit 包装器（无限速用户逃公平整形且不进活跃字节统计）。
 func TestRequiresBufferedCopyWhenFairShareEnabled(t *testing.T) {
 	sched := protocol.FairScheduler()
-	old := sched.AvailBps()
+	old := sched.RootCapBytePerSec()
 	defer sched.SetNodeBandwidth(old)
 
 	sched.SetNodeBandwidth(0) // 公平关闭

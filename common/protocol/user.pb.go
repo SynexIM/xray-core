@@ -36,6 +36,11 @@ type User struct {
 	// instead of each protocol re-implementing a RuntimeLimits() account method.
 	// 0 means unlimited. Bandwidth + connection cap + fair-share all key off the
 	// resulting *MemoryUser, so the dispatcher enforces them with no protocol code.
+	// ⚠️ 单位陷阱（FR-079d）：这里的 `_bps` 是 **比特/秒**（业务单位，面板按 Mbps 展示后 ×1e6）。
+	// 而 app/fairshare/command/command.proto 里的 `_bps` 是 **字节/秒**。同一个后缀差 8 倍。
+	// 唯一的换算点是 common/protocol/user_limits.go 的 bitsPerSecondToRuntimeBytesPerSecond，
+	// 由 common/protocol/node_fairshare_units_test.go 钉死。新增速率字段一律带
+	// `_bit_per_sec` / `_byte_per_sec` 后缀，不许再用裸 `_bps`。
 	BandwidthBps uint64 `protobuf:"varint,4,opt,name=bandwidth_bps,json=bandwidthBps,proto3" json:"bandwidth_bps,omitempty"`
 	ConnLimit    uint32 `protobuf:"varint,5,opt,name=conn_limit,json=connLimit,proto3" json:"conn_limit,omitempty"`
 	// Dual-rate shaping (PIR / CIR / CBS). Optional on top of bandwidth_bps.
@@ -56,8 +61,13 @@ type User struct {
 	// committed_bps above bandwidth_bps is meaningless and is ignored.
 	CommittedBps        uint64 `protobuf:"varint,6,opt,name=committed_bps,json=committedBps,proto3" json:"committed_bps,omitempty"`
 	CommittedBurstBytes uint64 `protobuf:"varint,7,opt,name=committed_burst_bytes,json=committedBurstBytes,proto3" json:"committed_burst_bytes,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// class 是这个用户所属的争抢等级（= SKU，如 "live" / "shortvideo"）。
+	// 权重、normal_cap、突发信用不放在这里——它们是运营参数，走
+	// app.fairshare.command 的 SetClassPolicy 整份下发，这里只带一个名字。
+	// 空 = 未分类，落到 class 表里名字为空的那条兜底策略；没有兜底策略就是同权重、无 class 上限。
+	Class         string `protobuf:"bytes,8,opt,name=class,proto3" json:"class,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *User) Reset() {
@@ -139,11 +149,18 @@ func (x *User) GetCommittedBurstBytes() uint64 {
 	return 0
 }
 
+func (x *User) GetClass() string {
+	if x != nil {
+		return x.Class
+	}
+	return ""
+}
+
 var File_common_protocol_user_proto protoreflect.FileDescriptor
 
 const file_common_protocol_user_proto_rawDesc = "" +
 	"\n" +
-	"\x1acommon/protocol/user.proto\x12\x14xray.common.protocol\x1a!common/serial/typed_message.proto\"\x8b\x02\n" +
+	"\x1acommon/protocol/user.proto\x12\x14xray.common.protocol\x1a!common/serial/typed_message.proto\"\xa1\x02\n" +
 	"\x04User\x12\x14\n" +
 	"\x05level\x18\x01 \x01(\rR\x05level\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12:\n" +
@@ -152,7 +169,8 @@ const file_common_protocol_user_proto_rawDesc = "" +
 	"\n" +
 	"conn_limit\x18\x05 \x01(\rR\tconnLimit\x12#\n" +
 	"\rcommitted_bps\x18\x06 \x01(\x04R\fcommittedBps\x122\n" +
-	"\x15committed_burst_bytes\x18\a \x01(\x04R\x13committedBurstBytesB^\n" +
+	"\x15committed_burst_bytes\x18\a \x01(\x04R\x13committedBurstBytes\x12\x14\n" +
+	"\x05class\x18\b \x01(\tR\x05classB^\n" +
 	"\x18com.xray.common.protocolP\x01Z)github.com/xtls/xray-core/common/protocol\xaa\x02\x14Xray.Common.Protocolb\x06proto3"
 
 var (

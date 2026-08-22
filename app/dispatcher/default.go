@@ -208,10 +208,10 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, destination net.Destina
 		// 节点级公平限速（ipipx 魔改）：套在 per-user 桶之外，双向整形使「节点总出口」生效。
 		// 节点公平未开启时 Acquire 返回 nil，wrapper 直通（零开销）。
 		// 同上：每条管道包一次，且方向要对——down 喂 downlink 读端，up 喂 uplink 读端。
-		if up, down, onBytes, release := protocol.FairScheduler().Acquire(user); up != nil {
-			inboundLink.Reader = buf.NewFairLimitReader(ctx, inboundLink.Reader, down, onBytes) // downlink ← down
-			outboundLink.Reader = buf.NewFairLimitReader(ctx, outboundLink.Reader, up, onBytes) // uplink ← up
-			context.AfterFunc(ctx, release)
+		if h := protocol.FairScheduler().Acquire(user); h != nil {
+			inboundLink.Reader = buf.NewFairLimitReader(ctx, inboundLink.Reader, h.Down, h.OnBytes, h.OnBlocked) // downlink ← down
+			outboundLink.Reader = buf.NewFairLimitReader(ctx, outboundLink.Reader, h.Up, h.OnBytes, h.OnBlocked) // uplink ← up
+			context.AfterFunc(ctx, h.Release)
 		}
 	}
 
@@ -292,10 +292,10 @@ func WrapLink(ctx context.Context, policyManager policy.Manager, statsManager st
 			link.Writer = buf.NewRateLimitWriterWithLimiter(ctx, link.Writer, limiters...)
 		}
 		// 节点级公平限速：套在 per-user 桶之外，双向整形使「节点总出口」生效。
-		if up, down, onBytes, release := protocol.FairScheduler().Acquire(user); up != nil {
-			link.Reader = buf.NewFairLimitReader(ctx, link.Reader, up, onBytes)
-			link.Writer = buf.NewFairLimitWriter(ctx, link.Writer, down, onBytes)
-			context.AfterFunc(ctx, release)
+		if h := protocol.FairScheduler().Acquire(user); h != nil {
+			link.Reader = buf.NewFairLimitReader(ctx, link.Reader, h.Up, h.OnBytes, h.OnBlocked)
+			link.Writer = buf.NewFairLimitWriter(ctx, link.Writer, h.Down, h.OnBytes, h.OnBlocked)
+			context.AfterFunc(ctx, h.Release)
 		}
 	}
 
