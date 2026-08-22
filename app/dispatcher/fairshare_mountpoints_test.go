@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xtls/xray-core/common"
+	"github.com/xtls/xray-core/common/buf"
+	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/session"
@@ -118,6 +121,46 @@ func TestWrapLinkShapesBothDirections(t *testing.T) {
 	})
 }
 
+// pumpBytes 写入并排空 total 字节，只回错误——供并发子 goroutine 使用。
+func pumpBytes(w buf.Writer, r buf.Reader, total int) error {
+	writeErr := make(chan error, 1)
+	go func() {
+		remaining := total
+		for remaining > 0 {
+			n := remaining
+			if n > buf.Size {
+				n = buf.Size
+			}
+			b := buf.New()
+			b.Extend(int32(n))
+			if err := w.WriteMultiBuffer(buf.MultiBuffer{b}); err != nil {
+				writeErr <- err
+				return
+			}
+			remaining -= n
+		}
+		_ = common.Close(w)
+		writeErr <- nil
+	}()
+
+	read := 0
+	for read < total {
+		mb, err := r.ReadMultiBuffer()
+		read += int(mb.Len())
+		buf.ReleaseMulti(mb)
+		if err != nil {
+			break
+		}
+	}
+	if err := <-writeErr; err != nil {
+		return err
+	}
+	if read < total {
+		return errors.New("only drained ", read, " of ", total, " bytes")
+	}
+	return nil
+}
+
 // 同一个用户开 N 条连接，额度不放大：N 条一起总共只能跑一份带宽。
 //
 // 这条是限速能不能立住的根本。桶按 email 在 NodeFairScheduler 里共享，
@@ -136,17 +179,26 @@ func TestManyConnectionsShareOneBudget(t *testing.T) {
 		links = append(links, [2]*transport.Link{in, out})
 	}
 
+	// 不在子 goroutine 里调 t.Fatalf（那不是运行本测试的 goroutine），
+	// 出错走 channel 回主 goroutine 报。
 	var wg sync.WaitGroup
+	errs := make(chan error, conns)
 	start := time.Now()
 	for _, l := range links {
 		wg.Add(1)
 		go func(in, out *transport.Link) {
 			defer wg.Done()
-			pumpAndTime(t, in.Writer, out.Reader, perConn)
+			errs <- pumpBytes(in.Writer, out.Reader, perConn)
 		}(l[0], l[1])
 	}
 	wg.Wait()
 	elapsed := time.Since(start)
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("并发灌流失败：%v", err)
+		}
+	}
 
 	if elapsed < fairTestMinThrottle {
 		t.Fatalf("%d 条连接各跑 %d 字节（合计 %d）只花了 %v（< %v）——每条连接一只桶，开连接就能放大额度",
