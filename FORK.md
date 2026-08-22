@@ -19,7 +19,8 @@ common/buf/fairlimit.go     公平份额整形
 common/buf/limit.go         每用户带宽整形
 common/protocol/user_limits.go     每用户限速状态
 common/protocol/user_conns.go      每用户连接数
-common/protocol/node_fairshare.go  节点级公平调度器
+common/protocol/node_fairshare.go  节点级自适应带宽调度器
+common/protocol/burst_credit.go    突发信用
 proxy/http/users.go         给 http 协议补上客户端（email）管理
 ```
 
@@ -27,24 +28,26 @@ proxy/http/users.go         给 http 协议补上客户端（email）管理
 
 | 文件 | 加了什么 |
 |---|---|
-| `common/protocol/user.proto` | `bandwidth_bps` `conn_limit` 两个**顶层**字段；双速率的 `committed_bps` `committed_burst_bytes` |
+| `common/protocol/user.proto` | `bandwidth_bps` `conn_limit` 两个**顶层**字段；双速率的 `committed_bps` `committed_burst_bytes`；争抢等级 `class` |
 | `common/protocol/user.go` | `ToMemoryUser` 带上限速；`ToProtoUser` 容忍无 account 的用户 |
 | `app/dispatcher/default.go` | 把限速包装器挂到 link 上（单速率一个桶、双速率两个）；连接数上限；按站点计流量 |
 | `app/dispatcher/stats.go` | `siteReadCounter` |
-| `app/proxyman/command/*` | `DrainInbound` `ResumeInbound` `BatchAlterInbound` |
+| `app/proxyman/command/*` | `DrainInbound` `ResumeInbound` `BatchAlterInbound`；`AddUsersOperation` `RemoveUsersOperation`；卸载时清运行态 |
 | `app/router/command/*` | `BatchAddRule` `BatchRemoveRule` `ListRuleFull` |
 | `app/reverse/*` | Reverse 加锁 + 存 dispatcher/ohm，开放 bridge/portal 的增删查 |
 | `app/policy/*` | `user_site` 开关（按站点计流量，默认关——域名基数无上限） |
 | `common/session/session.go` | `DialedRemoteAddr`（访问日志补齐目标 IP 用） |
 | `features/policy/policy.go` | `Stats.UserSite` |
-| `proxy/proxy.go` | `UserUpdater` 接口；受限用户强制走 buffered copy |
+| `proxy/proxy.go` | `UserUpdater` 接口；`BatchUserManager` 接口；受限用户强制走 buffered copy |
 | `proxy/http/*` | 客户端管理与限速 |
 | `proxy/vless/inbound/inbound.go` | 删用户时重置限速器与连接数 |
-| `proxy/socks/config.proto` `proxy/http/config.proto` | `UserAccount` 也带双速率字段 |
-| `proxy/shadowsocks_2022/config.proto` | `RelayDestination` 带四个限速字段（relay 没有 User 消息） |
+| `proxy/socks/config.proto` `proxy/http/config.proto` | `UserAccount` 也带双速率字段与 `class` |
+| `proxy/shadowsocks_2022/config.proto` | `RelayDestination` 带四个限速字段与 `class`（relay 没有 User 消息） |
+| `proxy/shadowsocks_2022/inbound_multi.go` | email→下标索引；`AddUsers`/`RemoveUsers` 批量入口 |
+| `proxy/shadowsocks/validator.go` `proxy/vmess/validator.go` | email→下标索引，`Del`/`Remove` 从 O(N) 变 O(1) |
 | `proxy/shadowsocks_2022/inbound_relay.go` | 每个 destination 一个长期 `MemoryUser`；顺带补上漏传的 `level` |
 | `proxy/http/users.go` | `UserStore` 把双速率翻进 `MemoryUser` |
-| `infra/conf/*.go` | 各协议解析 `committed_bps` `committed_burst_bytes` |
+| `infra/conf/*.go` | 各协议解析 `committed_bps` `committed_burst_bytes` `class` |
 | `infra/conf/api.go` | 注册三个新 command service |
 | `main/distro/all/all.go` | 引入新 app 与 command service |
 
@@ -119,6 +122,173 @@ link 层是真推字节量速率的：突发段应在 PIR 附近，CBS 烧干后
 `getLink` 的两条独立管道方向极易搞错（历史上上行漏过限速），只测一个方向
 另一个方向漏了不会有任何提示。
 
+### 节点级限速是一个自适应带宽调度器，不是均分
+
+`node_fairshare.go` 原来是 `share = avail / len(active)` 纯人头均分。它有两个
+说不过去的地方：
+
+一是**只想要 0.17 Mbps 的人照样占着一整份**。480 Mbps 的节点、500 个客户，
+其中 300 个只在挂着不怎么用，剩下 200 个人也只能拿人头份额 0.96 Mbps，
+另外那 300 份基本烂在手里。
+
+二是**地板无条件生效**。原来 `share < hard` 时把每个人都抬到硬地板，不管
+`hard × 人数` 是否给得起：160,000 B/s 的节点、50 个活跃用户、16,384 的硬地板 →
+调度器发出去 819,200 B/s，是节点上限的 5.1 倍。发出的额度比水管还大，
+它就不再是瓶颈，真实排队跑到上游运营商的缓冲区里去了——那里我们既看不见也
+控制不了。这不是 bug 而是「只慢不断连」的刻意取舍，但它的代价没被写下来。
+2026-08-22 裁定改选「节点总出口守得住」。
+
+现在是 **work-conserving 加权 max-min 公平（注水法）**，对标运营商 BNG 里的
+Subscriber-aware Hierarchical QoS：
+
+```
+每 tick 把活跃成员分两类
+  satisfied   本 tick 从未因等令牌阻塞  →  demand = 实测吞吐（他就要这么多）
+  backlogged  阻塞过                    →  还想要更多，具体多少不必猜
+分配
+  1  地板先扣掉（前提：地板×活跃人数 ≤ root_cap，给不起就不给）
+  2  satisfied 按实测吞吐（+1/8 抬头）钉住，扣掉
+  3  剩下的池子在 backlogged 里按 class weight 分
+  4  谁分到超过自己天花板就钉住、多的还池，回 3，直到无人新饱和
+```
+
+**关键简化：不需要预测「他想要多少」，只需要知道「他够不够」。**
+够不够靠 `FairLimitReader`/`Writer` 的 `onBlocked` 回调测——这一 tick 内一次都
+没为等令牌而阻塞过，就是够了。不猜数值、不做 DPI、不做流量指纹。
+
+额度总量契约：**只要调度器进入约束态**（有成员被权重份额压住，而不是拿到自己
+想要的全部），Σ allocation ≤ root_cap，一个字节都不多发。反过来，没人被压住时
+每人发的是各自天花板，合计可以大于 root_cap——那不是超发，那是 work-conserving
+的定义，因为没人真的想要那么多。
+
+三档地板，逐档退到给得起为止：`max(class 地板, 软地板)` → 硬地板 → 不给。
+地板还被自己的天花板夹住：给一个只买了 8KB/s 的人 16KB/s 的地板毫无意义，
+他跑不掉，只会白白吃掉别人的份额。
+
+拥塞滞回：利用率不过上阈值**根本不削速**，每人跑自己的天花板；回落到下阈值
+并连续 N 个 tick 才退出，避免在 89%/91%/89% 之间反复抖动。阈值留空 = 不做拥塞
+判定（永远公平模式，等于改造前的行为）。
+
+**`normal_cap` 不是保证带宽，绝不能实现成 CIR。** 500 个在线客户 × 20 Mbps =
+10 Gbps，物理只有 500 Mbps，数学上不可能保证。它的语义是「机器不挤的时候你能
+一直跑到这个速度」。`node_fairshare_test.go` 里有一条测试专门守住这件事：
+10 个人挤 6 MB/s 时**人人都拿不到** `normal_cap`。
+
+**xray 只管「带宽怎么分」，管不了「排队延迟」。** xray 是在用户态对已经读进内存
+的 buffer 整形，做不了 AQM。直播在拥塞时的体验主要取决于延迟而不是带宽，
+所以节点装机还必须一并下发 `tc qdisc replace dev <wan> root cake bandwidth
+<root_cap>`，且 `root_cap` 两边同值。只做加权公平，直播在满载时照样卡。
+
+### 突发信用：只按超出基准的那部分扣，且不给测速开后门
+
+客户买的是 20 Mbps，但他偶尔开个网页、下个 300 MB 文件、跑一次测速——这些时候
+线路应该觉得很快；持续拉几十 GB 的人则应该稳定回落到基准。一个固定的桶做不到
+两头兼顾，所以有了 `burst_credit.go`：
+
+```
+桶容量   burst_credit_bytes（约 1 GB）
+扣费     只按超出 normal_cap 的那部分字节扣 —— 跑 120 Mbps、基准 20 Mbps 时
+         按 100 Mbps 的量消耗。按全量扣的话，老老实实跑基准的人也会被扣光。
+回补     跑得比 normal_cap 慢时按没用满的差额回补
+峰值     随信用线性衰减：信用满 → burst_cap，信用空 → normal_cap。
+         不做断崖回落，那在客户端表现为下载突然卡死一下。
+整形     有突发策略的成员用 25ms 窗口（普通成员 125ms）。burst_cap 常是基准的
+         5~6 倍，用 125ms 窗口会让它一次倾泻近 2MB，整形就成了摆设。
+```
+
+**明确不做：识别测速站然后偷偷解除限速。** 测速显示 120 Mbps 而实际下载永远
+20 Mbps，会让测速结果不再代表真实体验，且极易被用户反向识别——换个非常见测速站
+就露馅。通用突发信用本身就能让测速跑出高值，这是诚实的做法：他测出来的 120
+就是他这会儿真能跑到的 120。
+
+### class（= SKU）策略表走 `SetClassPolicy`，不另造通道
+
+class 名挂在 `User.class` 上随实例下发，策略表（weight / normal_cap /
+burst_cap / burst_credit / floor_ratio）是**运营参数**，走
+`app.fairshare.command` 的 `SetClassPolicy` 整份声明式替换，不进客户界面。
+直播 weight 高于短视频；实测拥塞时两者拿到的带宽正好是 weight 比，
+且短视频不被饿死；直播空闲时短视频能吃满自己的 `normal_cap`。
+
+class 必须贯穿**全部八个协议**的配置路径。少覆盖一个的表现极其隐蔽：
+配置写了、面板显示了、保存也成功了，xray 解析时静默丢弃，这个客户在节点上落回
+同权重兜底，卖出去的直播优先级不生效而账面上是生效的。
+`infra/conf/limits_matrix_test.go` 逐协议钉住这件事。
+
+### ⚠️ 单位陷阱：同一个 `_bps` 后缀，两处含义差 8 倍
+
+```
+common/protocol/user.proto        bandwidth_bps / committed_bps   比特/秒
+app/fairshare/command/*.proto     avail_bps / *_floor_bps         字节/秒
+```
+
+前者是业务单位（面板按 Mbps 展示后 ×1e6），后者是限速器单位。唯一的换算点是
+`user_limits.go` 的 `bitsPerSecondToRuntimeBytesPerSecond`。
+
+这两组历史字段**不改名**（改名会断掉已经在跑的 node-agent），改为在两份 proto
+里各自写死语义，并由 `common/protocol/node_fairshare_units_test.go` 与
+`app/fairshare/command/command_units_test.go` 两组断言测试钉住那个 8 倍差。
+谁要是「顺手统一成同一单位」，那两组测试会红——而线上的症状会是
+「节点被掐到 1/8 速度」，从现象倒查回来要几天。
+
+**新增的速率字段一律带 `_bit_per_sec` / `_byte_per_sec` 后缀，不许再用裸 `_bps`。**
+
+### 不许有默认带宽
+
+```
+每客户端 bandwidth_bps / committed_bps   0 → 不套桶
+节点 avail_bps                           0 → 整个节点公平关闭
+软地板 soft_floor_bps                    0 → 无软地板
+硬地板 hard_floor_bps                    0 → 无硬地板
+class 不配                               → 同权重、无 class 上限、无突发
+```
+
+后两条是这次改的：原来 0 会被悄悄换成 `500_000/8` 和 `16*1024` 两个魔数，
+运营看不出来自己其实开了地板。**0 就是「无地板」，不是「用默认值」。**
+代价要在面板上写明：开了节点公平又不设硬地板，极端拥挤时用户可能被压到接近 0
+而不只是变慢——这必须是运营明知的选择，不能由代码替他默默决定。
+
+### 5 万实例下的客户换手：批量入口与 email 索引
+
+目标是 5 万实例/单节点组，而客户换手（到期释放、续费、改配）天天在发生。
+原来四处管理路径都随用户数线性增长，其中最贵的是 **SS2022 的 EIH 表整份重建**
+（`sing-shadowsocks` 的 `MultiService` 只暴露 `UpdateUsers`，`uPSK`/`uPSKHash`/
+`uCipher` 三张表都是包内私有，没有增量入口；上游自己在 `inbound_multi.go` 里
+留了注释承认这里性能不行）。逐个增删 5000 个客户 = 重建 5000 次全表。
+
+两件事一起做：
+
+- **email→下标索引**（ss2022 / shadowsocks / vmess 三处）：`Del`/`Remove`/
+  `GetUser` 从 O(N) 变 O(1)。
+- **批量入口** `AddUsers`/`RemoveUsers`（`proxy.BatchUserManager`，可选能力）：
+  一批只重建一次表、只锁一次，且整批原子——批里有一个坏的整批不生效，
+  不留会让 configHash 漂移的半截状态。命令面对应
+  `AddUsersOperation`/`RemoveUsersOperation`；没有批量能力的 proxy 自动退回逐个。
+  （原有的 `BatchAlterInbound` 只是把 N 个 RPC 合成一个 RPC，落到 inbound 上
+  仍然是 N 次单客户操作。）
+
+实测（`proxy/shadowsocks_2022/inbound_multi_churn_test.go`，5 万用户底数、
+增删各 5000 个）：
+
+| | 耗时 | 认证路径累计被锁 | 最长一次 |
+|---|---|---|---|
+| 逐个 | 4 分 56.8 秒 | 4 分 56.4 秒 | 560 ms |
+| 批量 | 60.8 ms | 60.8 ms | 31 ms |
+
+**热路径一个字节都没动**：VLESS/Trojan/VMess/SS2022 的认证本来就是 O(1)；
+旧版 SS AEAD 的逐个试解是**协议缺陷不是代码缺陷**，靠「SS 一律用 2022 版」规避。
+
+顺带修了一个安静的泄漏：per-user 限速桶挂在全局 `runtimeLimiters`（`sync.Map`，
+键是 `*MemoryUser` 指针），用户被删掉之后没人清，那张表继续攥着指针——
+既回收不了内存，也让这个用户永远活在进程里。5 万实例的月度换手会稳定攒出几万个
+僵尸条目。清理放在命令层**知道用户是谁**的那一处（先查后删再清），
+五个协议共用一份逻辑，不会有哪个漏掉。
+
+### ⏳ 还没验证的：Hysteria2 的 Brutal 与整形器叠加
+
+Hysteria2 的 Brutal 拥塞控制**主动忽略拥塞信号硬发**。它与用户态整形器叠加时
+会不会打架，只能在真节点上实测，不是看代码能得出的结论。**结论出来之前，
+不要假设 hysteria 线路的限速行为与其他协议一致。**
+
 ### 为什么 reverse 要能热改
 
 控制面给客户换入口是常规操作。配置只在启动时读一次的话，换一个客户的入口
@@ -144,10 +314,9 @@ Linux 的 splice 在两个 socket 之间零拷贝直通，会绕过 dispatcher �
 
 ### 公平调度里「这个用户的天花板」怎么算
 
-`fairOwnLimitBytesPerSecond` 返回的 0 在三个调用点（`Member` 建桶、`recompute`
-活跃分支、`applyOwn` 非活跃分支）都是「这个用户没有自己的上限」的意思。
-所以它必须返回**实际天花板**：`bandwidth_bps` 非 0 就用它，否则退到
-`committed_bps`，两个都是 0 才返回 0。
+`fairOwnLimitBytesPerSecond` 返回的 0 在所有调用点（`Member` 建桶与 `ceilingFor`）
+都是「这个用户没有自己的上限」的意思。所以它必须返回**实际天花板**：
+`bandwidth_bps` 非 0 就用它，否则退到 `committed_bps`，两个都是 0 才返回 0。
 
 只读 `bandwidth_bps` 会让「只买了承诺速率」的客户（PIR=0、CIR>0，语义上就是单速率
 CIR）在公平分配里被当成无天花板：拥挤时他分到一份自己根本跑不满的份额
