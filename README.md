@@ -40,7 +40,7 @@
 
 [Mozilla Public License Version 2.0](https://github.com/XTLS/Xray-core/blob/main/LICENSE)
 
-SynexIM release assets are published from the `SynexIM-Labs/xray-core` repository
+SynexIM release assets are published from the `SynexIM/xray-core` repository
 and are separate from the upstream XTLS release channel.
 
 ## Documentation
@@ -63,13 +63,13 @@ and are separate from the upstream XTLS release channel.
   - [XTLS/Xray-install](https://github.com/XTLS/Xray-install) (**Official**)
   - [tempest](https://github.com/team-cloudchaser/tempest) (supports [`systemd`](https://systemd.io) and [OpenRC](https://github.com/OpenRC/openrc); Linux-only)
 - Docker
-  - [ghcr.io/synexim-labs/xray-core](https://github.com/SynexIM-Labs/xray-core/pkgs/container/xray-core) (**SynexIM fork**)
+  - [ghcr.io/synexim/xray-core](https://github.com/SynexIM/xray-core/pkgs/container/xray-core) (**SynexIM fork**)
   - [ghcr.io/xtls/xray-core](https://ghcr.io/xtls/xray-core) (**Official**)
   - [teddysun/xray](https://hub.docker.com/r/teddysun/xray)
   - [wulabing/xray_docker](https://github.com/wulabing/xray_docker)
 - Web Panel
   - [Remnawave](https://github.com/remnawave/panel)
-  - [3X-UI](https://github.com/SynexIM-Labs/3x-ui)
+  - [3X-UI](https://github.com/SynexIM/3x-ui)
   - [PasarGuard](https://github.com/PasarGuard/panel)
   - [Xray-UI](https://github.com/qist/xray-ui)
   - [X-Panel](https://github.com/xeefei/X-Panel)
