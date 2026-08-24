@@ -60,3 +60,8 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// XTLS/REALITY#33 lifts the target TLS record buffer to the RFC 8446
+// TLSCiphertext bound. Without it, legitimate 8–17 KiB certificate records
+// authenticate the REALITY client and then fail before VLESS starts.
+replace github.com/xtls/reality => github.com/fanyangCS/REALITY v0.0.0-20260622032638-9c5a0848486b
