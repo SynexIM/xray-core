@@ -66,6 +66,22 @@ jobs:
           go-version-file: go.mod
           check-latest: true
           cache: false
+      - name: Authenticate private module access
+        # go.mod replaces github.com/xtls/reality with our own fork (see the note
+        # there). That fork is private, so `go mod download` needs a credential the
+        # default GITHUB_TOKEN does not carry — it is scoped to this repo only.
+        # PRIVATE_MODULE_TOKEN needs read access to SynexIM/reality and nothing else.
+        env:
+          PRIVATE_MODULE_TOKEN: ${{ secrets.PRIVATE_MODULE_TOKEN }}
+        run: |
+          if [ -z "${PRIVATE_MODULE_TOKEN}" ]; then
+            echo "PRIVATE_MODULE_TOKEN is not set; private module fetch will fail." >&2
+            exit 1
+          fi
+          echo "GOPRIVATE=github.com/SynexIM/*" >> "$GITHUB_ENV"
+          git config --global \
+            url."https://x-access-token:${PRIVATE_MODULE_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
       - name: Check Format
         run: |
           go install -v mvdan.cc/gofumpt@latest
@@ -86,6 +102,22 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: true
+      - name: Authenticate private module access
+        # go.mod replaces github.com/xtls/reality with our own fork (see the note
+        # there). That fork is private, so `go mod download` needs a credential the
+        # default GITHUB_TOKEN does not carry — it is scoped to this repo only.
+        # PRIVATE_MODULE_TOKEN needs read access to SynexIM/reality and nothing else.
+        env:
+          PRIVATE_MODULE_TOKEN: ${{ secrets.PRIVATE_MODULE_TOKEN }}
+        run: |
+          if [ -z "${PRIVATE_MODULE_TOKEN}" ]; then
+            echo "PRIVATE_MODULE_TOKEN is not set; private module fetch will fail." >&2
+            exit 1
+          fi
+          echo "GOPRIVATE=github.com/SynexIM/*" >> "$GITHUB_ENV"
+          git config --global \
+            url."https://x-access-token:${PRIVATE_MODULE_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
       - name: Restore Geodat Cache
         uses: actions/cache/restore@v6
         with:

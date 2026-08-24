@@ -28,6 +28,7 @@ require (
 	golang.org/x/net v0.57.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0
+	golang.org/x/time v0.14.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb
 	golang.zx2c4.com/wireguard/windows v1.0.1
@@ -54,14 +55,17 @@ require (
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
-	golang.org/x/time v0.14.0 // indirect
 	golang.org/x/tools v0.47.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-// XTLS/REALITY#33 lifts the target TLS record buffer to the RFC 8446
-// TLSCiphertext bound. Without it, legitimate 8–17 KiB certificate records
-// authenticate the REALITY client and then fail before VLESS starts.
-replace github.com/xtls/reality => github.com/fanyangCS/REALITY v0.0.0-20260622032638-9c5a0848486b
+// REALITY 读借用目标记录的缓冲区原本写死 8192，低于 RFC 8446 §5.2 允许的记录上限
+// （2^14+256 加 5 字节记录头 = 16645）。证书链稍长的目标会在客户端**已经通过认证之后**
+// 被放弃，服务端看着一切正常——这类失败最难查。
+//
+// 指向我们自己的 fork：与上游只差一处改动加一个测试，随时能 rebase 回去。
+// 不用第三方个人 fork——握手路径上不放我们控制不住的仓库。
+// 上游同源 PR 是 XTLS/REALITY#33，至今未合并；合并后删掉这条 replace 即可。
+replace github.com/xtls/reality => github.com/SynexIM/reality v0.0.0-20260824122831-54e668eba00b

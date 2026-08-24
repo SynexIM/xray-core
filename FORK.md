@@ -357,6 +357,30 @@ CIR）在公平分配里被当成无天花板：拥挤时他分到一份自己�
 双速率用户的天花板是 **PIR**，不是 CIR——CIR 只在 CBS 花完后拉低长期均值，
 不是他能跑到的最快速度。
 
+## 依赖替换：REALITY
+
+`go.mod` 把 `github.com/xtls/reality` 换成 `github.com/SynexIM/reality`。
+
+改的只有一处：读取借用目标记录的缓冲区，从写死的 8192 改成协议上限
+`recordHeaderLen + maxCiphertextTLS13`（16645）。8192 低于 RFC 8446 §5.2 允许的
+记录长度，证书链稍长的目标（`www.microsoft.com` 带 OCSP 装订是 8273 字节）会在
+**客户端已经通过认证之后**被放弃——服务端看着一切正常，客户就是连不上。
+
+那份 fork 与上游只差这一处改动加一个双向测试（小了红、大了也红），
+`git diff upstream/main` 永远只有两个文件，rebase 成本接近零。
+
+上游同源 PR 是 [XTLS/REALITY#33](https://github.com/XTLS/REALITY/pull/33)，
+至今未合并；合并之后删掉那条 `replace` 即可。
+
+两件事跟着这个替换走：
+
+- **它是私有仓**，所以 CI 需要 `PRIVATE_MODULE_TOKEN`（只需 `SynexIM/reality`
+  的读权限）。四个用 Go 的 workflow 都加了同一个凭据步骤，缺了会直接失败而不是
+  悄悄走到构建阶段才报错。本地构建用 `GOPRIVATE=github.com/SynexIM/*`。
+- **`tls.go` 受 MPL 2.0 覆盖。** MPL 要求分发可执行形式时，向接收方提供被修改文件的
+  源码。目前二进制只下发到我们自己的节点，不构成对外分发；如果将来把节点二进制交给
+  客户或第三方，这一条要重新看——把那个 fork 公开是最省事的满足方式。
+
 ## 有意不改的
 
 - `app/router/command/command.go:170` 的 context 泄漏（`context.WithTimeout`
