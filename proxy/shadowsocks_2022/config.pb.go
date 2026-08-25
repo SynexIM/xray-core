@@ -190,7 +190,7 @@ type RelayDestination struct {
 	ConnLimit           uint32 `protobuf:"varint,7,opt,name=conn_limit,json=connLimit,proto3" json:"conn_limit,omitempty"`
 	CommittedBps        uint64 `protobuf:"varint,8,opt,name=committed_bps,json=committedBps,proto3" json:"committed_bps,omitempty"`
 	CommittedBurstBytes uint64 `protobuf:"varint,9,opt,name=committed_burst_bytes,json=committedBurstBytes,proto3" json:"committed_burst_bytes,omitempty"`
-	// class 是争抢等级名（= SKU）。权重 / normal_cap / 突发信用是运营参数，
+	// class 标识共享同一争抢策略的客户组。权重 / normal_cap / 突发信用是运营参数，
 	// 走 app.fairshare.command 的 SetClassPolicy 整份下发，这里只带一个名字。
 	Class         string `protobuf:"bytes,10,opt,name=class,proto3" json:"class,omitempty"`
 	unknownFields protoimpl.UnknownFields

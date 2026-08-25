@@ -13,7 +13,7 @@ service FairShareService {
   // 0=关闭节点级公平。
   rpc SetNodeBandwidth(SetNodeBandwidthRequest) returns (SetNodeBandwidthResponse) {}
 
-  // SetClassPolicy 整份替换 class（=SKU）策略表。声明式：没出现在请求里的 class 即被删除。
+  // SetClassPolicy 整份替换客户组争抢策略表。声明式：没出现在请求里的 class 即被删除。
   // 不另造通道——class 权重、normal_cap、突发信用全走这一个 rpc（FR-079e）。
   rpc SetClassPolicy(SetClassPolicyRequest) returns (SetClassPolicyResponse) {}
 
@@ -42,7 +42,7 @@ message SetNodeBandwidthRequest {
 
 message SetNodeBandwidthResponse {}
 
-// ClassPolicy 是一个 class（= 一个 SKU，如「短视频」「直播」）的争抢策略。
+// ClassPolicy 是一组客户共享的争抢策略。
 // class 名字挂在 User.class 上随实例下发；这张表是运营参数，不进客户界面（FR-079f）。
 message ClassPolicy {
   string name = 1; // class 名，与 User.class 对应。空名 = 未分类用户的兜底策略。

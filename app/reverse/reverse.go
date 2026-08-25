@@ -40,7 +40,7 @@ func init() {
 //
 // 相比上游多了一把锁、dispatcher/ohm 的引用和 started 标志：为的是让
 // app/reverse/command 能在**进程不重启**的前提下加减 bridge/portal。
-// 控制面给客户换入口是常规操作，如果每次都要重启 xray，那台节点上所有
+// API 调用方切换入口是常规操作，如果每次都要重启 xray，那台节点上所有
 // 其他客户的连接会一起断——热改是产品要求，不是优化。
 type Reverse struct {
 	access  sync.Mutex
@@ -214,7 +214,7 @@ func (r *Reverse) RemovePortal(tag string) error {
 	return errors.New("portal not found: ", tag)
 }
 
-// List 返回当前生效的配置快照。控制面靠它确认「我改的到底进去没有」，
+// List 返回当前生效的配置快照。API 调用方靠它确认「我改的到底进去没有」，
 // 所以返回的是运行中对象的实况，不是启动时那份配置的副本。
 func (r *Reverse) List() ([]*BridgeConfig, []*PortalConfig) {
 	r.access.Lock()

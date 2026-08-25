@@ -78,7 +78,7 @@ type MemoryUser struct {
 	CommittedBps        uint64
 	CommittedBurstBytes uint64
 
-	// Class 是争抢等级名（= SKU）。策略表（weight / normal_cap / 突发信用）不在这里，
+	// Class 标识共享同一争抢策略的客户组。策略表（weight / normal_cap / 突发信用）不在这里，
 	// 走 NodeFairScheduler.SetClassPolicies 整份下发，见 node_fairshare.go。
 	Class string
 }

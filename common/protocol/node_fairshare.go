@@ -78,7 +78,7 @@ type NodeFairScheduler struct {
 	started atomic.Bool // 后台 recompute goroutine 是否已启动（懒启动）
 }
 
-// ClassPolicy 是一个 class（= 一个 SKU）的争抢策略，随 SetClassPolicy 整份下发。
+// ClassPolicy 是一组客户共享的争抢策略，随 SetClassPolicy 整份下发。
 type ClassPolicy struct {
 	Name   string
 	Weight uint32 // 0 视为 1

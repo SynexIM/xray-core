@@ -19,7 +19,7 @@ type SocksAccount struct {
 	// 突发额度 CBS（字节，留空 = 一天的承诺量）。语义见 protocol.User。
 	CommittedBps        uint64 `json:"committed_bps"`
 	CommittedBurstBytes uint64 `json:"committed_burst_bytes"`
-	// class 是争抢等级名（= SKU），策略表走 fairshare 的 SetClassPolicy 下发。
+	// class 标识共享同一争抢策略的客户组，策略表走 fairshare 的 SetClassPolicy 下发。
 	Class string `json:"class"`
 }
 

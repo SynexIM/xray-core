@@ -11,7 +11,7 @@ import (
 )
 
 // reverseServer 实现 ReverseService：把 bridge/portal 的增删查接到进程内的
-// *reverse.Reverse 上，让控制面换入口时不必重启 xray。
+// *reverse.Reverse 上，让 API 调用方换入口时不必重启 xray。
 type reverseServer struct {
 	v *core.Instance
 }

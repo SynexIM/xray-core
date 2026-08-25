@@ -61,7 +61,7 @@ type User struct {
 	// committed_bps above bandwidth_bps is meaningless and is ignored.
 	CommittedBps        uint64 `protobuf:"varint,6,opt,name=committed_bps,json=committedBps,proto3" json:"committed_bps,omitempty"`
 	CommittedBurstBytes uint64 `protobuf:"varint,7,opt,name=committed_burst_bytes,json=committedBurstBytes,proto3" json:"committed_burst_bytes,omitempty"`
-	// class 是这个用户所属的争抢等级（= SKU，如 "live" / "shortvideo"）。
+	// class 标识这个用户所属的共享争抢策略客户组（如 "live" / "shortvideo"）。
 	// 权重、normal_cap、突发信用不放在这里——它们是运营参数，走
 	// app.fairshare.command 的 SetClassPolicy 整份下发，这里只带一个名字。
 	// 空 = 未分类，落到 class 表里名字为空的那条兜底策略；没有兜底策略就是同权重、无 class 上限。

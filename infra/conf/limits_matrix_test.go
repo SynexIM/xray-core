@@ -36,7 +36,7 @@ const (
 	wantConn  = uint32(8)
 	wantCIR   = uint64(2_500_000)  // CIR 20 Mbps
 	wantCBS   = uint64(50_000_000) // CBS 50 MB
-	wantClass = "live"             // class（= SKU），拥塞时按它的 weight 争抢
+	wantClass = "live"             // 共享同一争抢策略的客户组，拥塞时按它的 weight 争抢
 )
 
 // usersOf 把各协议 Build 出来的配置拆出用户列表。
@@ -218,7 +218,7 @@ func TestEveryProtocolReadsLimits(t *testing.T) {
 				t.Errorf("没写突发额度却冒出一个值 %d", u.CommittedBurstBytes)
 			}
 			if u.Class != "" {
-				t.Errorf("没写 class 却冒出一个 %q——未分类用户会被塞进某个 SKU 的权重里", u.Class)
+				t.Errorf("没写 class 却冒出一个 %q——未分类用户会被塞进某个客户组的权重里", u.Class)
 			}
 		})
 	}

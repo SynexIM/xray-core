@@ -3,7 +3,7 @@ syntax = "proto3";
 // app.reverse.command 是 ipipx 魔改：reverse（内网穿透的 bridge/portal）的
 // gRPC 热改面。
 //
-// 为什么需要它：控制面给客户换入口是常规操作。如果每次都要重启 xray 进程，
+// 为什么需要它：API 调用方切换入口是常规操作。如果每次都要重启 xray 进程，
 // 那台节点上**所有**客户的连接会一起断——一个客户改配置，全节点陪着断线。
 // 热改是产品要求，不是优化。
 package xray.app.reverse.command;
@@ -23,7 +23,7 @@ service ReverseService {
   rpc AddPortal(AddPortalRequest) returns (AddPortalResponse) {}
   // RemovePortal 摘掉一个 portal，连同它的 outbound handler。
   rpc RemovePortal(RemovePortalRequest) returns (RemovePortalResponse) {}
-  // ListReverse 返回当前**运行中**的 bridge/portal，控制面靠它确认改动生效了。
+  // ListReverse 返回当前**运行中**的 bridge/portal，API 调用方靠它确认改动生效了。
   rpc ListReverse(ListReverseRequest) returns (ListReverseResponse) {}
 }
 

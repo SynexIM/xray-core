@@ -91,7 +91,7 @@ mixed 全都通过同一个 `ToMemoryUser` 拿到，不需要每个协议各自�
    gRPC 热更新；
 2. dispatcher 只通过稳定客户身份查询该 app，不再从 `MemoryUser` 读取限额；
 3. 全协议配置矩阵、SS2022 relay、既有连接热改与真流量测试全部迁到新 seam；
-4. 3x-ui 与控制面已经改用新契约，并完成一个同版发布窗口。
+4. 3x-ui 与 API 调用方已经改用新契约，并完成一个同版发布窗口。
 
 四项满足后，删除 `User` 的 PIR/CIR/CBS 字段及协议复制字段；在此之前不建双写兼容层。
 
@@ -264,7 +264,7 @@ Subscriber-aware Hierarchical QoS：
 就露馅。通用突发信用本身就能让测速跑出高值，这是诚实的做法：他测出来的 120
 就是他这会儿真能跑到的 120。
 
-### class（= SKU）策略表走 `SetClassPolicy`，不另造通道
+### 共享争抢策略客户组走 `SetClassPolicy`，不另造通道
 
 class 名挂在 `User.class` 上随实例下发，策略表（weight / normal_cap /
 burst_cap / burst_credit / floor_ratio）是**运营参数**，走
@@ -356,7 +356,7 @@ Hysteria2 的 Brutal 拥塞控制**主动忽略拥塞信号硬发**。它与用�
 
 ### 为什么 reverse 要能热改
 
-控制面给客户换入口是常规操作。配置只在启动时读一次的话，换一个客户的入口
+API 调用方给连接换入口是常规操作。配置只在启动时读一次的话，换一个连接的入口
 就得重启 xray——那台节点上**所有**客户的连接会一起断。一个人改配置、
 全节点陪着断线，这不是优化问题。所以有了 `app/reverse/command`。
 

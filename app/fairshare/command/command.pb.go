@@ -151,7 +151,7 @@ func (*SetNodeBandwidthResponse) Descriptor() ([]byte, []int) {
 	return file_app_fairshare_command_command_proto_rawDescGZIP(), []int{1}
 }
 
-// ClassPolicy 是一个 class（= 一个 SKU，如「短视频」「直播」）的争抢策略。
+// ClassPolicy 是一组客户共享的争抢策略。
 // class 名字挂在 User.class 上随实例下发；这张表是运营参数，不进客户界面（FR-079f）。
 type ClassPolicy struct {
 	state protoimpl.MessageState `protogen:"open.v1"`

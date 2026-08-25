@@ -34,7 +34,7 @@ type FairShareServiceClient interface {
 	// SetNodeBandwidth 设置节点整形上限 root_cap（avail_bps，已含 headroom 折算）与地板、拥塞滞回。
 	// 0=关闭节点级公平。
 	SetNodeBandwidth(ctx context.Context, in *SetNodeBandwidthRequest, opts ...grpc.CallOption) (*SetNodeBandwidthResponse, error)
-	// SetClassPolicy 整份替换 class（=SKU）策略表。声明式：没出现在请求里的 class 即被删除。
+	// SetClassPolicy 整份替换客户组争抢策略表。声明式：没出现在请求里的 class 即被删除。
 	// 不另造通道——class 权重、normal_cap、突发信用全走这一个 rpc（FR-079e）。
 	SetClassPolicy(ctx context.Context, in *SetClassPolicyRequest, opts ...grpc.CallOption) (*SetClassPolicyResponse, error)
 	// GetStatus 读调度器运行态。存在的理由是回答运维在「这台节点分配看起来不太对」
@@ -88,7 +88,7 @@ type FairShareServiceServer interface {
 	// SetNodeBandwidth 设置节点整形上限 root_cap（avail_bps，已含 headroom 折算）与地板、拥塞滞回。
 	// 0=关闭节点级公平。
 	SetNodeBandwidth(context.Context, *SetNodeBandwidthRequest) (*SetNodeBandwidthResponse, error)
-	// SetClassPolicy 整份替换 class（=SKU）策略表。声明式：没出现在请求里的 class 即被删除。
+	// SetClassPolicy 整份替换客户组争抢策略表。声明式：没出现在请求里的 class 即被删除。
 	// 不另造通道——class 权重、normal_cap、突发信用全走这一个 rpc（FR-079e）。
 	SetClassPolicy(context.Context, *SetClassPolicyRequest) (*SetClassPolicyResponse, error)
 	// GetStatus 读调度器运行态。存在的理由是回答运维在「这台节点分配看起来不太对」

@@ -7,7 +7,7 @@ import (
 )
 
 // api 的 services 是一串字符串对照表。写错一个字母不会报错：
-// 服务只是没注册，控制面调过来收到 "unimplemented"，而配置看起来完全正常。
+// 服务只是没注册，API 调用方收到 "unimplemented"，而配置看起来完全正常。
 // 所以把每个名字都过一遍，确认它真的映射出了一个服务。
 func TestAPIServiceNames(t *testing.T) {
 	names := []string{
@@ -30,7 +30,7 @@ func TestAPIServiceNames(t *testing.T) {
 				t.Fatalf("Build 失败：%v", err)
 			}
 			if len(built.Service) != 1 {
-				t.Fatalf("%q 没映射出服务——控制面调过来会收到 unimplemented", name)
+				t.Fatalf("%q 没映射出服务——API 调用方会收到 unimplemented", name)
 			}
 			if built.Service[0].Type == "" {
 				t.Fatalf("%q 映射出了一个空类型", name)

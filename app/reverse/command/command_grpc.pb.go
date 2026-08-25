@@ -7,7 +7,7 @@
 // app.reverse.command 是 ipipx 魔改：reverse（内网穿透的 bridge/portal）的
 // gRPC 热改面。
 //
-// 为什么需要它：控制面给客户换入口是常规操作。如果每次都要重启 xray 进程，
+// 为什么需要它：API 调用方切换入口是常规操作。如果每次都要重启 xray 进程，
 // 那台节点上**所有**客户的连接会一起断——一个客户改配置，全节点陪着断线。
 // 热改是产品要求，不是优化。
 
@@ -45,7 +45,7 @@ type ReverseServiceClient interface {
 	AddPortal(ctx context.Context, in *AddPortalRequest, opts ...grpc.CallOption) (*AddPortalResponse, error)
 	// RemovePortal 摘掉一个 portal，连同它的 outbound handler。
 	RemovePortal(ctx context.Context, in *RemovePortalRequest, opts ...grpc.CallOption) (*RemovePortalResponse, error)
-	// ListReverse 返回当前**运行中**的 bridge/portal，控制面靠它确认改动生效了。
+	// ListReverse 返回当前**运行中**的 bridge/portal，API 调用方靠它确认改动生效了。
 	ListReverse(ctx context.Context, in *ListReverseRequest, opts ...grpc.CallOption) (*ListReverseResponse, error)
 }
 
@@ -119,7 +119,7 @@ type ReverseServiceServer interface {
 	AddPortal(context.Context, *AddPortalRequest) (*AddPortalResponse, error)
 	// RemovePortal 摘掉一个 portal，连同它的 outbound handler。
 	RemovePortal(context.Context, *RemovePortalRequest) (*RemovePortalResponse, error)
-	// ListReverse 返回当前**运行中**的 bridge/portal，控制面靠它确认改动生效了。
+	// ListReverse 返回当前**运行中**的 bridge/portal，API 调用方靠它确认改动生效了。
 	ListReverse(context.Context, *ListReverseRequest) (*ListReverseResponse, error)
 	mustEmbedUnimplementedReverseServiceServer()
 }

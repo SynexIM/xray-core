@@ -21,7 +21,7 @@ import (
 )
 
 // 起一个真的 xray 实例（带 reverse app），把 ReverseService 挂在 bufconn 上，
-// 然后**只通过 gRPC** 改配置。这样测的是控制面真正会走的那条路，
+// 然后**只通过 gRPC** 改配置。这样测的是 API 调用方真正会走的那条路，
 // 而不是直接调 Go 方法自欺欺人。
 func newTestClient(t *testing.T, bridges []*reverse.BridgeConfig, portals []*reverse.PortalConfig) (ReverseServiceClient, *core.Instance) {
 	t.Helper()
@@ -171,7 +171,7 @@ func TestHotReconfigureLeavesOthersAlone(t *testing.T) {
 	}
 }
 
-// 启动时就配好的 bridge/portal 要能被列出来——控制面拿 List 当「现在到底是什么」
+// 启动时就配好的 bridge/portal 要能被列出来——API 调用方拿 List 当「现在到底是什么」
 // 的唯一事实来源，漏掉启动配置会让它以为节点是空的，进而重复下发。
 func TestListReflectsBootConfig(t *testing.T) {
 	c, _ := newTestClient(t,
