@@ -33,6 +33,10 @@ type Route struct {
 	outboundGroupTags []string
 	outboundTag       string
 	ruleTag           string
+	// Set only when this Route describes a *rule* (see ListRule) rather than a
+	// routing decision for a live connection.
+	userEmail  []string
+	inboundTag []string
 }
 
 // Init initializes the Router.
@@ -61,9 +65,11 @@ func (r *Router) Init(ctx context.Context, config *Config, d dns.Client, ohm out
 			return err
 		}
 		rr := &Rule{
-			Condition: cond,
-			Tag:       rule.GetTag(),
-			RuleTag:   rule.GetRuleTag(),
+			Condition:  cond,
+			Tag:        rule.GetTag(),
+			RuleTag:    rule.GetRuleTag(),
+			UserEmail:  rule.GetUserEmail(),
+			InboundTag: rule.GetInboundTag(),
 		}
 		if wh := rule.GetWebhook(); wh != nil {
 			notifier, err := NewWebhookNotifier(wh)
@@ -167,9 +173,11 @@ func (r *Router) ReloadRules(config *Config, shouldAppend bool) error {
 			return err
 		}
 		rr := &Rule{
-			Condition: cond,
-			Tag:       rule.GetTag(),
-			RuleTag:   rule.GetRuleTag(),
+			Condition:  cond,
+			Tag:        rule.GetTag(),
+			RuleTag:    rule.GetRuleTag(),
+			UserEmail:  rule.GetUserEmail(),
+			InboundTag: rule.GetInboundTag(),
 		}
 		if wh := rule.GetWebhook(); wh != nil {
 			notifier, err := NewWebhookNotifier(wh)
@@ -237,6 +245,8 @@ func (r *Router) ListRule() []routing.Route {
 		ruleList = append(ruleList, &Route{
 			outboundTag: rule.Tag,
 			ruleTag:     rule.RuleTag,
+			userEmail:   rule.UserEmail,
+			inboundTag:  rule.InboundTag,
 		})
 	}
 	return ruleList
@@ -313,6 +323,34 @@ func (r *Route) GetOutboundTag() string {
 
 func (r *Route) GetRuleTag() string {
 	return r.ruleTag
+}
+
+// GetUser and GetInboundTag are promoted from the embedded routing.Context,
+// which is nil for the Routes that ListRule() builds — a rule is not a
+// connection, so there is no context to carry. Calling the promoted method on
+// that nil interface panics and takes the whole process down, so both are
+// overridden here to answer from the rule's own conditions instead.
+//
+// When the Context *is* set this Route describes a live routing decision, and
+// the connection's own values are the truthful answer; delegate to it.
+func (r *Route) GetUser() string {
+	if r.Context != nil {
+		return r.Context.GetUser()
+	}
+	if len(r.userEmail) == 0 {
+		return ""
+	}
+	return r.userEmail[0]
+}
+
+func (r *Route) GetInboundTag() string {
+	if r.Context != nil {
+		return r.Context.GetInboundTag()
+	}
+	if len(r.inboundTag) == 0 {
+		return ""
+	}
+	return r.inboundTag[0]
 }
 
 func init() {
