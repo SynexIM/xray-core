@@ -6,6 +6,7 @@ import (
 	goerrors "errors"
 	"io"
 	"math/big"
+	"sync/atomic"
 
 	"github.com/xtls/xray-core/common/dice"
 
@@ -58,17 +59,19 @@ func getStatCounter(v *core.Instance, tag string) (stats.Counter, stats.Counter)
 
 // Handler implements outbound.Handler.
 type Handler struct {
-	tag             string
-	senderSettings  *proxyman.SenderConfig
-	streamSettings  *internet.MemoryStreamConfig
-	proxyConfig     proto.Message
-	proxy           proxy.Outbound
-	outboundManager outbound.Manager
-	mux             *mux.ClientManager
-	xudp            *mux.ClientManager
-	udp443          string
-	uplinkCounter   stats.Counter
-	downlinkCounter stats.Counter
+	tag                string
+	senderSettings     *proxyman.SenderConfig
+	streamSettings     *internet.MemoryStreamConfig
+	proxyConfig        proto.Message
+	proxy              proxy.Outbound
+	outboundManager    outbound.Manager
+	mux                *mux.ClientManager
+	xudp               *mux.ClientManager
+	udp443             string
+	uplinkCounter      stats.Counter
+	downlinkCounter    stats.Counter
+	rateLimiter        *outboundRateLimiter
+	rateLimitBitPerSec atomic.Uint64
 }
 
 // NewHandler creates a new Handler based on the given configuration.
@@ -90,6 +93,10 @@ func NewHandler(ctx context.Context, config *core.OutboundHandlerConfig) (outbou
 		switch s := senderSettings.(type) {
 		case *proxyman.SenderConfig:
 			h.senderSettings = s
+			if s.RateLimitBitPerSec != nil {
+				h.rateLimiter = newOutboundRateLimiter(s.GetRateLimitBitPerSec())
+				h.rateLimitBitPerSec.Store(s.GetRateLimitBitPerSec())
+			}
 			mss, err := internet.ToMemoryStreamConfig(s.StreamSettings)
 			if err != nil {
 				return nil, errors.New("failed to parse stream settings").Base(err).AtWarning()
@@ -181,6 +188,10 @@ func (h *Handler) Tag() string {
 func (h *Handler) Dispatch(ctx context.Context, link *transport.Link) {
 	outbounds := session.OutboundsFromContext(ctx)
 	ob := outbounds[len(outbounds)-1]
+	if h.rateLimiter != nil {
+		h.rateLimiter.WrapLink(ctx, link)
+		ob.ForceBufferedCopy = true
+	}
 	content := session.ContentFromContext(ctx)
 	if h.senderSettings != nil && h.senderSettings.TargetStrategy.HasStrategy() && ob.Target.Address.Family().IsDomain() && (content == nil || !content.SkipDNSResolve) {
 		strategy := h.senderSettings.TargetStrategy
@@ -383,12 +394,32 @@ func (h *Handler) Close() error {
 
 // SenderSettings implements outbound.Handler.
 func (h *Handler) SenderSettings() *serial.TypedMessage {
-	return serial.ToTypedMessage(h.senderSettings)
+	if h.senderSettings == nil {
+		return serial.ToTypedMessage(nil)
+	}
+	senderSettings := proto.Clone(h.senderSettings).(*proxyman.SenderConfig)
+	if h.rateLimiter != nil {
+		rateLimitBitPerSec := h.rateLimitBitPerSec.Load()
+		senderSettings.RateLimitBitPerSec = &rateLimitBitPerSec
+	}
+	return serial.ToTypedMessage(senderSettings)
 }
 
 // ProxySettings implements outbound.Handler.
 func (h *Handler) ProxySettings() *serial.TypedMessage {
 	return serial.ToTypedMessage(h.proxyConfig)
+}
+
+// SetOutboundRateLimitBitPerSec changes this outbound's aggregate payload cap
+// without replacing the limiter object. Existing connections therefore observe
+// the new rate without being closed or re-wrapped.
+func (h *Handler) SetOutboundRateLimitBitPerSec(rateLimitBitPerSec uint64) error {
+	if h.rateLimiter == nil {
+		return errors.New("outbound was not configured for hot rate limiting")
+	}
+	h.rateLimiter.SetBitPerSec(rateLimitBitPerSec)
+	h.rateLimitBitPerSec.Store(rateLimitBitPerSec)
+	return nil
 }
 
 func ParseRandomIP(addr net.Address, prefix string) net.Address {

@@ -766,10 +766,8 @@ func CopyRawConnIfExist(ctx context.Context, readerConn net.Conn, writerConn net
 	if len(outbounds) == 0 {
 		return readV(ctx, reader, writer, timer, readCounter)
 	}
-	for _, ob := range outbounds {
-		if ob.CanSpliceCopy == 3 {
-			return readV(ctx, reader, writer, timer, readCounter)
-		}
+	if outboundRequiresBufferedCopy(outbounds) {
+		return readV(ctx, reader, writer, timer, readCounter)
 	}
 
 	for {
@@ -821,6 +819,15 @@ func CopyRawConnIfExist(ctx context.Context, readerConn net.Conn, writerConn net
 			return err
 		}
 	}
+}
+
+func outboundRequiresBufferedCopy(outbounds []*session.Outbound) bool {
+	for _, ob := range outbounds {
+		if ob.CanSpliceCopy == 3 || ob.ForceBufferedCopy {
+			return true
+		}
+	}
+	return false
 }
 
 // requiresBufferedCopy keeps governed users on the transport.Link path. Linux

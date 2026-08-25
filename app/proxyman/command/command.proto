@@ -140,6 +140,14 @@ message ListOutboundsResponse {
   repeated core.OutboundHandlerConfig outbounds = 1;
 }
 
+// SetOutboundRateLimitOperation changes the aggregate payload rate shared by
+// every connection using one outbound. Zero disables the cap. The operation
+// mutates the live limiter in place so established connections keep running
+// and observe the new rate.
+message SetOutboundRateLimitOperation {
+  uint64 rate_limit_bit_per_sec = 1;
+}
+
 service HandlerService {
   rpc AddInbound(AddInboundRequest) returns (AddInboundResponse) {}
 

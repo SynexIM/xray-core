@@ -27,6 +27,10 @@ type OutboundOperation interface {
 	ApplyOutbound(context.Context, outbound.Handler) error
 }
 
+type outboundRateLimitSetter interface {
+	SetOutboundRateLimitBitPerSec(uint64) error
+}
+
 func getInbound(handler inbound.Handler) (proxy.Inbound, error) {
 	gi, ok := handler.(proxy.GetInbound)
 	if !ok {
@@ -168,6 +172,15 @@ func (op *UpdateUserOperation) ApplyInbound(ctx context.Context, handler inbound
 		return errors.New("failed to parse user").Base(err)
 	}
 	return uu.UpdateUser(ctx, mUser)
+}
+
+// ApplyOutbound changes one outbound's shared runtime limiter in place.
+func (op *SetOutboundRateLimitOperation) ApplyOutbound(_ context.Context, handler outbound.Handler) error {
+	setter, ok := handler.(outboundRateLimitSetter)
+	if !ok {
+		return errors.New("outbound does not support aggregate rate limiting")
+	}
+	return setter.SetOutboundRateLimitBitPerSec(op.RateLimitBitPerSec)
 }
 
 type handlerServer struct {
@@ -333,6 +346,9 @@ func (s *handlerServer) RemoveOutbound(ctx context.Context, request *RemoveOutbo
 }
 
 func (s *handlerServer) AlterOutbound(ctx context.Context, request *AlterOutboundRequest) (*AlterOutboundResponse, error) {
+	if request.Operation == nil {
+		return nil, errors.New("nil operation")
+	}
 	rawOperation, err := request.Operation.GetInstance()
 	if err != nil {
 		return nil, errors.New("unknown operation").Base(err)
@@ -343,6 +359,9 @@ func (s *handlerServer) AlterOutbound(ctx context.Context, request *AlterOutboun
 	}
 
 	handler := s.ohm.GetHandler(request.Tag)
+	if handler == nil {
+		return nil, errors.New("failed to get handler: ", request.Tag)
+	}
 	return &AlterOutboundResponse{}, operation.ApplyOutbound(ctx, handler)
 }
 

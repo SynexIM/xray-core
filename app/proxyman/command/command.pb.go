@@ -1382,6 +1382,54 @@ func (x *ListOutboundsResponse) GetOutbounds() []*core.OutboundHandlerConfig {
 	return nil
 }
 
+// SetOutboundRateLimitOperation changes the aggregate payload rate shared by
+// every connection using one outbound. Zero disables the cap. The operation
+// mutates the live limiter in place so established connections keep running
+// and observe the new rate.
+type SetOutboundRateLimitOperation struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	RateLimitBitPerSec uint64                 `protobuf:"varint,1,opt,name=rate_limit_bit_per_sec,json=rateLimitBitPerSec,proto3" json:"rate_limit_bit_per_sec,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *SetOutboundRateLimitOperation) Reset() {
+	*x = SetOutboundRateLimitOperation{}
+	mi := &file_app_proxyman_command_command_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetOutboundRateLimitOperation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetOutboundRateLimitOperation) ProtoMessage() {}
+
+func (x *SetOutboundRateLimitOperation) ProtoReflect() protoreflect.Message {
+	mi := &file_app_proxyman_command_command_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetOutboundRateLimitOperation.ProtoReflect.Descriptor instead.
+func (*SetOutboundRateLimitOperation) Descriptor() ([]byte, []int) {
+	return file_app_proxyman_command_command_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *SetOutboundRateLimitOperation) GetRateLimitBitPerSec() uint64 {
+	if x != nil {
+		return x.RateLimitBitPerSec
+	}
+	return 0
+}
+
 type Config struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1390,7 +1438,7 @@ type Config struct {
 
 func (x *Config) Reset() {
 	*x = Config{}
-	mi := &file_app_proxyman_command_command_proto_msgTypes[31]
+	mi := &file_app_proxyman_command_command_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1402,7 +1450,7 @@ func (x *Config) String() string {
 func (*Config) ProtoMessage() {}
 
 func (x *Config) ProtoReflect() protoreflect.Message {
-	mi := &file_app_proxyman_command_command_proto_msgTypes[31]
+	mi := &file_app_proxyman_command_command_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1415,7 +1463,7 @@ func (x *Config) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Config.ProtoReflect.Descriptor instead.
 func (*Config) Descriptor() ([]byte, []int) {
-	return file_app_proxyman_command_command_proto_rawDescGZIP(), []int{31}
+	return file_app_proxyman_command_command_proto_rawDescGZIP(), []int{32}
 }
 
 var File_app_proxyman_command_command_proto protoreflect.FileDescriptor
@@ -1485,7 +1533,9 @@ const file_app_proxyman_command_command_proto_rawDesc = "" +
 	"\x15AlterOutboundResponse\"\x16\n" +
 	"\x14ListOutboundsRequest\"W\n" +
 	"\x15ListOutboundsResponse\x12>\n" +
-	"\toutbounds\x18\x01 \x03(\v2 .xray.core.OutboundHandlerConfigR\toutbounds\"\b\n" +
+	"\toutbounds\x18\x01 \x03(\v2 .xray.core.OutboundHandlerConfigR\toutbounds\"S\n" +
+	"\x1dSetOutboundRateLimitOperation\x122\n" +
+	"\x16rate_limit_bit_per_sec\x18\x01 \x01(\x04R\x12rateLimitBitPerSec\"\b\n" +
 	"\x06Config2\x9a\f\n" +
 	"\x0eHandlerService\x12k\n" +
 	"\n" +
@@ -1516,7 +1566,7 @@ func file_app_proxyman_command_command_proto_rawDescGZIP() []byte {
 	return file_app_proxyman_command_command_proto_rawDescData
 }
 
-var file_app_proxyman_command_command_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
+var file_app_proxyman_command_command_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
 var file_app_proxyman_command_command_proto_goTypes = []any{
 	(*AddUserOperation)(nil),                 // 0: xray.app.proxyman.command.AddUserOperation
 	(*RemoveUserOperation)(nil),              // 1: xray.app.proxyman.command.RemoveUserOperation
@@ -1549,25 +1599,26 @@ var file_app_proxyman_command_command_proto_goTypes = []any{
 	(*AlterOutboundResponse)(nil),            // 28: xray.app.proxyman.command.AlterOutboundResponse
 	(*ListOutboundsRequest)(nil),             // 29: xray.app.proxyman.command.ListOutboundsRequest
 	(*ListOutboundsResponse)(nil),            // 30: xray.app.proxyman.command.ListOutboundsResponse
-	(*Config)(nil),                           // 31: xray.app.proxyman.command.Config
-	(*protocol.User)(nil),                    // 32: xray.common.protocol.User
-	(*core.InboundHandlerConfig)(nil),        // 33: xray.core.InboundHandlerConfig
-	(*serial.TypedMessage)(nil),              // 34: xray.common.serial.TypedMessage
-	(*core.OutboundHandlerConfig)(nil),       // 35: xray.core.OutboundHandlerConfig
+	(*SetOutboundRateLimitOperation)(nil),    // 31: xray.app.proxyman.command.SetOutboundRateLimitOperation
+	(*Config)(nil),                           // 32: xray.app.proxyman.command.Config
+	(*protocol.User)(nil),                    // 33: xray.common.protocol.User
+	(*core.InboundHandlerConfig)(nil),        // 34: xray.core.InboundHandlerConfig
+	(*serial.TypedMessage)(nil),              // 35: xray.common.serial.TypedMessage
+	(*core.OutboundHandlerConfig)(nil),       // 36: xray.core.OutboundHandlerConfig
 }
 var file_app_proxyman_command_command_proto_depIdxs = []int32{
-	32, // 0: xray.app.proxyman.command.AddUserOperation.user:type_name -> xray.common.protocol.User
-	32, // 1: xray.app.proxyman.command.AddUsersOperation.users:type_name -> xray.common.protocol.User
-	32, // 2: xray.app.proxyman.command.UpdateUserOperation.user:type_name -> xray.common.protocol.User
-	33, // 3: xray.app.proxyman.command.AddInboundRequest.inbound:type_name -> xray.core.InboundHandlerConfig
-	34, // 4: xray.app.proxyman.command.AlterInboundRequest.operation:type_name -> xray.common.serial.TypedMessage
-	34, // 5: xray.app.proxyman.command.BatchAlterInboundRequest.operations:type_name -> xray.common.serial.TypedMessage
+	33, // 0: xray.app.proxyman.command.AddUserOperation.user:type_name -> xray.common.protocol.User
+	33, // 1: xray.app.proxyman.command.AddUsersOperation.users:type_name -> xray.common.protocol.User
+	33, // 2: xray.app.proxyman.command.UpdateUserOperation.user:type_name -> xray.common.protocol.User
+	34, // 3: xray.app.proxyman.command.AddInboundRequest.inbound:type_name -> xray.core.InboundHandlerConfig
+	35, // 4: xray.app.proxyman.command.AlterInboundRequest.operation:type_name -> xray.common.serial.TypedMessage
+	35, // 5: xray.app.proxyman.command.BatchAlterInboundRequest.operations:type_name -> xray.common.serial.TypedMessage
 	16, // 6: xray.app.proxyman.command.BatchAlterInboundResponse.results:type_name -> xray.app.proxyman.command.BatchAlterInboundOperationResult
-	33, // 7: xray.app.proxyman.command.ListInboundsResponse.inbounds:type_name -> xray.core.InboundHandlerConfig
-	32, // 8: xray.app.proxyman.command.GetInboundUserResponse.users:type_name -> xray.common.protocol.User
-	35, // 9: xray.app.proxyman.command.AddOutboundRequest.outbound:type_name -> xray.core.OutboundHandlerConfig
-	34, // 10: xray.app.proxyman.command.AlterOutboundRequest.operation:type_name -> xray.common.serial.TypedMessage
-	35, // 11: xray.app.proxyman.command.ListOutboundsResponse.outbounds:type_name -> xray.core.OutboundHandlerConfig
+	34, // 7: xray.app.proxyman.command.ListInboundsResponse.inbounds:type_name -> xray.core.InboundHandlerConfig
+	33, // 8: xray.app.proxyman.command.GetInboundUserResponse.users:type_name -> xray.common.protocol.User
+	36, // 9: xray.app.proxyman.command.AddOutboundRequest.outbound:type_name -> xray.core.OutboundHandlerConfig
+	35, // 10: xray.app.proxyman.command.AlterOutboundRequest.operation:type_name -> xray.common.serial.TypedMessage
+	36, // 11: xray.app.proxyman.command.ListOutboundsResponse.outbounds:type_name -> xray.core.OutboundHandlerConfig
 	5,  // 12: xray.app.proxyman.command.HandlerService.AddInbound:input_type -> xray.app.proxyman.command.AddInboundRequest
 	7,  // 13: xray.app.proxyman.command.HandlerService.RemoveInbound:input_type -> xray.app.proxyman.command.RemoveInboundRequest
 	9,  // 14: xray.app.proxyman.command.HandlerService.DrainInbound:input_type -> xray.app.proxyman.command.DrainInboundRequest
@@ -1612,7 +1663,7 @@ func file_app_proxyman_command_command_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_app_proxyman_command_command_proto_rawDesc), len(file_app_proxyman_command_command_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   32,
+			NumMessages:   33,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

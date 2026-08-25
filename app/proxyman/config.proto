@@ -61,6 +61,10 @@ message SenderConfig {
   MultiplexingConfig multiplex_settings = 4;
   string via_cidr = 5;
   xray.transport.internet.DomainStrategy target_strategy = 6;
+  // Aggregate payload rate shared by every connection using this outbound.
+  // Presence opts this outbound into hot rate updates; zero disables the cap
+  // while keeping established connections ready for a later hot enable.
+  optional uint64 rate_limit_bit_per_sec = 7;
 }
 
 message MultiplexingConfig {

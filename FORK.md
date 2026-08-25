@@ -21,6 +21,7 @@ common/protocol/user_limits.go     每用户限速状态
 common/protocol/user_conns.go      每用户连接数
 common/protocol/node_fairshare.go  节点级自适应带宽调度器
 common/protocol/burst_credit.go    突发信用
+app/proxyman/outbound/rate_limit.go  每出站共享总带宽桶
 proxy/http/users.go         给 http 协议补上客户端（email）管理
 ```
 
@@ -32,7 +33,8 @@ proxy/http/users.go         给 http 协议补上客户端（email）管理
 | `common/protocol/user.go` | `ToMemoryUser` 带上限速；`ToProtoUser` 容忍无 account 的用户 |
 | `app/dispatcher/default.go` | 把限速包装器挂到 link 上（单速率一个桶、双速率两个）；连接数上限；按站点计流量 |
 | `app/dispatcher/stats.go` | `siteReadCounter` |
-| `app/proxyman/command/*` | `DrainInbound` `ResumeInbound` `BatchAlterInbound`；`AddUsersOperation` `RemoveUsersOperation`；卸载时清运行态 |
+| `app/proxyman/config.proto` | `SenderConfig.rate_limit_bit_per_sec`，每出站上下行合计共享的总速率 |
+| `app/proxyman/command/*` | `DrainInbound` `ResumeInbound` `BatchAlterInbound`；`AddUsersOperation` `RemoveUsersOperation`；卸载时清运行态；`SetOutboundRateLimitOperation` 热改出站总速率 |
 | `app/router/command/*` | `BatchAddRule` `BatchRemoveRule` `ListRuleFull` |
 | `app/reverse/*` | Reverse 加锁 + 存 dispatcher/ohm，开放 bridge/portal 的增删查 |
 | `app/policy/*` | `user_site` 开关（按站点计流量，默认关——域名基数无上限） |
@@ -62,6 +64,36 @@ mixed 全都通过同一个 `ToMemoryUser` 拿到，不需要每个协议各自�
 配置解析**自动就通了**，一行代码都不用加。后来加的 `committed_bps` /
 `committed_burst_bytes` 同样白拿这个好处——不过这一点不靠假设，
 `infra/conf/limits_matrix_test.go` 逐协议实际验证过。
+
+### 为什么每用户限速字段暂时不能退出核心 `User`
+
+本轮新增的**出站级**上限没有继续污染 `User`：它在
+`proxyman.SenderConfig.rate_limit_bit_per_sec`。该字段是 optional：未出现的普通
+出站保持上游 splice 快路径；显式出现（即使值为 0）的托管出站才进入可热改模式，
+运行时一个 outbound Handler 持有一个稳定令牌桶，所有客户、上下行共同经过它。
+托管出站固定走 buffered copy，避免 Linux splice 绕过桶。`AlterOutbound` 的
+`SetOutboundRateLimitOperation` 原地改桶，不换对象，因此既有连接不重启也能生效。
+
+但这不能替代 `User` 上现有的每客户 PIR/CIR/CBS。两者管的是不同边界：
+
+- 出站桶守住一个共享上游出口的总成本；
+- User 桶守住单个客户自己的速率与突发，不让一人吃掉整个共享出口。
+
+当前 Xray 没有独立于协议 User 的通用 per-client policy seam。若现在硬搬，启动配置、
+`UpdateUserOperation`、dispatcher 取运行限额、各协议的身份映射，以及没有 `User`
+消息的 SS2022 relay 都要各自再造一条映射；漏任何一条都会出现“面板显示限速，
+该协议实际不限”的静默失败。`infra/conf/limits_matrix_test.go` 证明现有顶层字段
+至少完整穿过了这些真实协议边界。
+
+所以本轮明确接受它们暂留核心类型。退出条件不是“找到更好看的 proto”，而是同时具备：
+
+1. 一个上游可接受或 fork 内稳定的通用 per-client limiter app，拥有启动时声明配置与
+   gRPC 热更新；
+2. dispatcher 只通过稳定客户身份查询该 app，不再从 `MemoryUser` 读取限额；
+3. 全协议配置矩阵、SS2022 relay、既有连接热改与真流量测试全部迁到新 seam；
+4. 3x-ui 与控制面已经改用新契约，并完成一个同版发布窗口。
+
+四项满足后，删除 `User` 的 PIR/CIR/CBS 字段及协议复制字段；在此之前不建双写兼容层。
 
 ### ss2022 relay 是唯一一个"限速字段放顶层"占不到便宜的地方
 
@@ -250,6 +282,8 @@ class 必须贯穿**全部八个协议**的配置路径。少覆盖一个的表�
 ```
 common/protocol/user.proto        bandwidth_bps / committed_bps   比特/秒
 app/fairshare/command/*.proto     avail_bps / *_floor_bps         字节/秒
+app/proxyman/config.proto         rate_limit_bit_per_sec           比特/秒
+app/proxyman/command/command.proto rate_limit_bit_per_sec          比特/秒
 ```
 
 前者是业务单位（面板按 Mbps 展示后 ×1e6），后者是限速器单位。唯一的换算点是

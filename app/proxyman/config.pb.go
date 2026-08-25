@@ -334,8 +334,12 @@ type SenderConfig struct {
 	MultiplexSettings *MultiplexingConfig     `protobuf:"bytes,4,opt,name=multiplex_settings,json=multiplexSettings,proto3" json:"multiplex_settings,omitempty"`
 	ViaCidr           string                  `protobuf:"bytes,5,opt,name=via_cidr,json=viaCidr,proto3" json:"via_cidr,omitempty"`
 	TargetStrategy    internet.DomainStrategy `protobuf:"varint,6,opt,name=target_strategy,json=targetStrategy,proto3,enum=xray.transport.internet.DomainStrategy" json:"target_strategy,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Aggregate payload rate shared by every connection using this outbound.
+	// Presence opts this outbound into hot rate updates; zero disables the cap
+	// while keeping established connections ready for a later hot enable.
+	RateLimitBitPerSec *uint64 `protobuf:"varint,7,opt,name=rate_limit_bit_per_sec,json=rateLimitBitPerSec,proto3,oneof" json:"rate_limit_bit_per_sec,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *SenderConfig) Reset() {
@@ -408,6 +412,13 @@ func (x *SenderConfig) GetTargetStrategy() internet.DomainStrategy {
 		return x.TargetStrategy
 	}
 	return internet.DomainStrategy(0)
+}
+
+func (x *SenderConfig) GetRateLimitBitPerSec() uint64 {
+	if x != nil && x.RateLimitBitPerSec != nil {
+		return *x.RateLimitBitPerSec
+	}
+	return 0
 }
 
 type MultiplexingConfig struct {
@@ -506,14 +517,16 @@ const file_app_proxyman_config_proto_rawDesc = "" +
 	"\x03tag\x18\x01 \x01(\tR\x03tag\x12M\n" +
 	"\x11receiver_settings\x18\x02 \x01(\v2 .xray.common.serial.TypedMessageR\x10receiverSettings\x12G\n" +
 	"\x0eproxy_settings\x18\x03 \x01(\v2 .xray.common.serial.TypedMessageR\rproxySettings\"\x10\n" +
-	"\x0eOutboundConfig\"\x9d\x03\n" +
+	"\x0eOutboundConfig\"\xf1\x03\n" +
 	"\fSenderConfig\x12-\n" +
 	"\x03via\x18\x01 \x01(\v2\x1b.xray.common.net.IPOrDomainR\x03via\x12N\n" +
 	"\x0fstream_settings\x18\x02 \x01(\v2%.xray.transport.internet.StreamConfigR\x0estreamSettings\x12K\n" +
 	"\x0eproxy_settings\x18\x03 \x01(\v2$.xray.transport.internet.ProxyConfigR\rproxySettings\x12T\n" +
 	"\x12multiplex_settings\x18\x04 \x01(\v2%.xray.app.proxyman.MultiplexingConfigR\x11multiplexSettings\x12\x19\n" +
 	"\bvia_cidr\x18\x05 \x01(\tR\aviaCidr\x12P\n" +
-	"\x0ftarget_strategy\x18\x06 \x01(\x0e2'.xray.transport.internet.DomainStrategyR\x0etargetStrategy\"\xa4\x01\n" +
+	"\x0ftarget_strategy\x18\x06 \x01(\x0e2'.xray.transport.internet.DomainStrategyR\x0etargetStrategy\x127\n" +
+	"\x16rate_limit_bit_per_sec\x18\a \x01(\x04H\x00R\x12rateLimitBitPerSec\x88\x01\x01B\x19\n" +
+	"\x17_rate_limit_bit_per_sec\"\xa4\x01\n" +
 	"\x12MultiplexingConfig\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12 \n" +
 	"\vconcurrency\x18\x02 \x01(\x05R\vconcurrency\x12(\n" +
@@ -577,6 +590,7 @@ func file_app_proxyman_config_proto_init() {
 	if File_app_proxyman_config_proto != nil {
 		return
 	}
+	file_app_proxyman_config_proto_msgTypes[5].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

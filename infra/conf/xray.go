@@ -211,14 +211,15 @@ func (c *InboundDetourConfig) Build() (*core.InboundHandlerConfig, error) {
 }
 
 type OutboundDetourConfig struct {
-	Protocol       string           `json:"protocol"`
-	SendThrough    *string          `json:"sendThrough"`
-	Tag            string           `json:"tag"`
-	Settings       *json.RawMessage `json:"settings"`
-	StreamSetting  *StreamConfig    `json:"streamSettings"`
-	ProxySettings  *ProxyConfig     `json:"proxySettings"`
-	MuxSettings    *MuxConfig       `json:"mux"`
-	TargetStrategy string           `json:"targetStrategy"`
+	Protocol           string           `json:"protocol"`
+	SendThrough        *string          `json:"sendThrough"`
+	Tag                string           `json:"tag"`
+	Settings           *json.RawMessage `json:"settings"`
+	StreamSetting      *StreamConfig    `json:"streamSettings"`
+	ProxySettings      *ProxyConfig     `json:"proxySettings"`
+	MuxSettings        *MuxConfig       `json:"mux"`
+	TargetStrategy     string           `json:"targetStrategy"`
+	RateLimitBitPerSec *uint64          `json:"rateLimitBitPerSec"`
 }
 
 func (c *OutboundDetourConfig) checkChainProxyConfig() error {
@@ -267,7 +268,7 @@ func validateOutboundTransportSecurity(rawConfig interface{}, senderSettings *pr
 
 // Build implements Buildable.
 func (c *OutboundDetourConfig) Build() (*core.OutboundHandlerConfig, error) {
-	senderSettings := &proxyman.SenderConfig{}
+	senderSettings := &proxyman.SenderConfig{RateLimitBitPerSec: c.RateLimitBitPerSec}
 	switch strings.ToLower(c.TargetStrategy) {
 	case "asis", "":
 		senderSettings.TargetStrategy = internet.DomainStrategy_AS_IS

@@ -75,6 +75,10 @@ type Outbound struct {
 	// CanSpliceCopy is a property for this connection
 	// 1 = can, 2 = after processing protocol info should be able to, 3 = cannot
 	CanSpliceCopy int
+	// ForceBufferedCopy keeps payload on transport.Link wrappers. Managed
+	// outbound policies such as a hot-reloadable aggregate rate limit require
+	// this because Linux splice would bypass those wrappers.
+	ForceBufferedCopy bool
 	// DialedRemoteAddr 是 ipipx 旁路：出站真正拨通后的对端 IP（freedom 解析域名后实际连上的远端）。
 	// 客户端送域名时 OriginalTarget/Target 无 IP，唯一可信目标 IP 在此（由 freedom 拨通后回填）。
 	// 访问日志 hook 据此补齐 destIP。nil = 未拨通/未回填（如 blackhole 禁陆，无真连接）。
