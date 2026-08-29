@@ -246,11 +246,7 @@ func fairOwnLimitBytesPerSecond(user *MemoryUser) uint64 {
 	if user == nil {
 		return 0
 	}
-	ceiling := user.BandwidthBps
-	if ceiling == 0 {
-		ceiling = user.CommittedBps
-	}
-	return bitsPerSecondToRuntimeBytesPerSecond(ceiling)
+	return bitsPerSecondToRuntimeBytesPerSecond(user.runtimeCeilingBps())
 }
 
 // Member 取（或懒建）某 user 的公平成员，返回上/下行桶。节点公平未开启时返回 (nil,nil)。

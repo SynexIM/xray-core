@@ -29,10 +29,10 @@ proxy/http/users.go         给 http 协议补上客户端（email）管理
 
 | 文件 | 加了什么 |
 |---|---|
-| `common/protocol/user.proto` | `bandwidth_bps` `conn_limit` 两个**顶层**字段；双速率的 `committed_bps` `committed_burst_bytes`；争抢等级 `class` |
-| `common/protocol/user.go` | `ToMemoryUser` 带上限速；`ToProtoUser` 容忍无 account 的用户 |
-| `app/dispatcher/default.go` | 把限速包装器挂到 link 上（单速率一个桶、双速率两个）；连接数上限；按站点计流量 |
-| `app/dispatcher/stats.go` | `siteReadCounter` |
+| `common/protocol/user.proto` | 顶层限速、连接数、`committed_bps` / `committed_burst_bytes`、`class`；另收敛 Nodus/IPNex 的方向限速字段与 `egress_tag`（字段 9–15） |
+| `common/protocol/user.go` | `ToMemoryUser` / `ToProtoUser` 保留全部运行态字段并容忍无 account 的用户 |
+| `common/protocol/user_limits.go` | 单一 per-user shaping seam：无方向字段仍走现有共享 PIR/CIR/CBS；有字段时上传/下载桶隔离 |
+| `app/dispatcher/default.go` | 限速挂到 link；连接数上限与 active gauges；用户固定出口；按站点计流量 |
 | `app/proxyman/config.proto` | `SenderConfig.rate_limit_bit_per_sec`，每出站上下行合计共享的总速率 |
 | `app/proxyman/command/*` | `DrainInbound` `ResumeInbound` `BatchAlterInbound`；`AddUsersOperation` `RemoveUsersOperation`；卸载时清运行态；`SetOutboundRateLimitOperation` 热改出站总速率 |
 | `app/router/command/*` | `BatchAddRule` `BatchRemoveRule` `ListRuleFull` |
@@ -52,6 +52,10 @@ proxy/http/users.go         给 http 协议补上客户端（email）管理
 | `infra/conf/*.go` | 各协议解析 `committed_bps` `committed_burst_bytes` `class` |
 | `infra/conf/api.go` | 注册三个新 command service |
 | `main/distro/all/all.go` | 引入新 app 与 command service |
+
+Nodus/IPNex 曾在删除的 vendored snapshot 中维护方向限速、固定出口和 active
+connection gauges。本 fork 将其经过测试的运行语义收敛到这份 canonical tree：不再
+保留第二份 xray 权威；原有 adaptive fair scheduler、class 与 burst-credit 仍是正交层。
 
 ### 为什么限速字段放在 `User` 顶层而不是各协议的 account 里
 

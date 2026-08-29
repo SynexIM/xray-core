@@ -188,22 +188,17 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, destination net.Destina
 	// 效果是**没有 email 的用户永远限不上速，也逃掉节点级公平**——
 	// 拥挤时他们会挤压守规矩的用户。stats 那部分才真的需要 email（计数器名里有它）。
 	if user != nil {
-		// limiters 是串联的桶：单速率时一个，配了承诺速率（CIR）时是「峰值桶 + 承诺桶」。
-		// 这里不关心是几个——按用户拿到什么就原样套上去，双速率的语义全在
-		// protocol.RuntimeRateLimiters 里定义。
-		if limiters, _ := user.RuntimeRateLimiters(buf.NewRateLimiterWithBurst); len(limiters) > 0 {
-			// getLink 的两条管道是分开的（不是 WrapLink 那种单条双向 link）：
-			//   downlink 管道 = inboundLink.Reader (读) / outboundLink.Writer (写)
-			//   uplink   管道 = inboundLink.Writer (写) / outboundLink.Reader (读)
-			// （方向由下方 stats 计数器包裹位置佐证：uplink 计数器包 inboundLink.Writer，
-			//   downlink 计数器包 outboundLink.Writer。）
-			// 每条管道各包【一次】同一个 limiter，读写共享同一用户桶（proto:182「读写共享同一用户桶」）。
-			// 此前把 limiter 同时套在 downlink 的两端（inboundLink.Reader + outboundLink.Writer），
-			// uplink 管道两端都没套 → 上行(上传)不限速（bug，从 WrapLink 误抄：那里 Reader=uplink/
-			// Writer=downlink 是单条 link 的恒等式，在这里的双管道拓扑不成立）。
-			// 修正：downlink 读端 + uplink 读端 各套一次。
-			inboundLink.Reader = buf.NewRateLimitReaderWithLimiter(ctx, inboundLink.Reader, limiters...)   // downlink
-			outboundLink.Reader = buf.NewRateLimitReaderWithLimiter(ctx, outboundLink.Reader, limiters...) // uplink
+		// RuntimeDirectionalRateLimiters is the sole per-user shaping seam. With
+		// no directional policy it returns the existing shared PIR/CIR/CBS chain
+		// for both pipes; with one it returns isolated upload and download chains.
+		limits := user.RuntimeDirectionalRateLimiters(buf.NewRateLimiterWithBurst)
+		// getLink has two separate pipes: inbound.Reader is download and
+		// outbound.Reader is upload. Each pipe is wrapped once at its read end.
+		if len(limits.Download) > 0 {
+			inboundLink.Reader = buf.NewRateLimitReaderWithLimiter(ctx, inboundLink.Reader, limits.Download...)
+		}
+		if len(limits.Upload) > 0 {
+			outboundLink.Reader = buf.NewRateLimitReaderWithLimiter(ctx, outboundLink.Reader, limits.Upload...)
 		}
 		// 节点级公平限速（ipipx 魔改）：套在 per-user 桶之外，双向整形使「节点总出口」生效。
 		// 节点公平未开启时 Acquire 返回 nil，wrapper 直通（零开销）。
@@ -286,10 +281,12 @@ func WrapLink(ctx context.Context, policyManager policy.Manager, statsManager st
 
 	// 同上：限速与公平只看用户本身，有没有 email 与它无关。
 	if user != nil {
-		// 同上：串联桶，单速率一个、双速率两个，这里原样套。
-		if limiters, _ := user.RuntimeRateLimiters(buf.NewRateLimiterWithBurst); len(limiters) > 0 {
-			link.Reader = buf.NewRateLimitReaderWithLimiter(ctx, link.Reader, limiters...)
-			link.Writer = buf.NewRateLimitWriterWithLimiter(ctx, link.Writer, limiters...)
+		limits := user.RuntimeDirectionalRateLimiters(buf.NewRateLimiterWithBurst)
+		if len(limits.Upload) > 0 {
+			link.Reader = buf.NewRateLimitReaderWithLimiter(ctx, link.Reader, limits.Upload...)
+		}
+		if len(limits.Download) > 0 {
+			link.Writer = buf.NewRateLimitWriterWithLimiter(ctx, link.Writer, limits.Download...)
 		}
 		// 节点级公平限速：套在 per-user 桶之外，双向整形使「节点总出口」生效。
 		if h := protocol.FairScheduler().Acquire(user); h != nil {
@@ -348,22 +345,58 @@ func outboundTarget(ctx context.Context) net.Destination {
 	return obs[len(obs)-1].Target
 }
 
-// enforceConnLimit applies the protocol-agnostic per-user connection cap. It is
-// the single enforcement point for conn_limit across every inbound (mixed/socks/
-// http, vless, shadowsocks, trojan): the dispatcher already holds the session
-// *MemoryUser, so no proxy needs its own counter. The reserved slot is released
-// when the connection context is cancelled (same lifecycle trackOnlineIP uses).
-func enforceConnLimit(ctx context.Context) error {
+// enforceConnLimit reserves the protocol-agnostic user slot and, when stats is
+// enabled, increments process-local inbound and user gauges. Every successful
+// increment is released once when the connection context ends.
+func enforceConnLimit(ctx context.Context, sm stats.Manager) error {
 	sessionInbound := session.InboundFromContext(ctx)
-	if sessionInbound == nil || sessionInbound.User == nil {
+	if sessionInbound == nil {
 		return nil
 	}
-	release, ok := sessionInbound.User.AcquireRuntimeConnection()
-	if !ok {
-		return errors.New("user ", sessionInbound.User.Email, " connection limit exceeded").AtWarning()
+	releases := make([]func(), 0, 3)
+	if user := sessionInbound.User; user != nil {
+		release, ok := user.AcquireRuntimeConnection()
+		if !ok {
+			return errors.New("user ", user.Email, " connection limit exceeded").AtWarning()
+		}
+		releases = append(releases, release)
+		if user.Email != "" && !isNoopStatsManager(sm) {
+			counter, err := sm.GetOrRegisterCounter(stats.ActiveUserConnectionCounterName(user.Email))
+			if err != nil {
+				releaseAll(releases)
+				return errors.New("register active user connection counter").Base(err)
+			}
+			if counter != nil {
+				counter.Add(1)
+				releases = append(releases, func() { counter.Add(-1) })
+			}
+		}
 	}
-	context.AfterFunc(ctx, release)
+	if sessionInbound.Tag != "" && !isNoopStatsManager(sm) {
+		counter, err := sm.GetOrRegisterCounter(stats.ActiveConnectionCounterName(sessionInbound.Tag))
+		if err != nil {
+			releaseAll(releases)
+			return errors.New("register active connection counter").Base(err)
+		}
+		if counter != nil {
+			counter.Add(1)
+			releases = append(releases, func() { counter.Add(-1) })
+		}
+	}
+	var once sync.Once
+	context.AfterFunc(ctx, func() { once.Do(func() { releaseAll(releases) }) })
 	return nil
+}
+
+func isNoopStatsManager(sm stats.Manager) bool {
+	_, noop := sm.(stats.NoopManager)
+	return noop
+}
+
+func releaseAll(releases []func()) {
+	for _, release := range releases {
+		release()
+	}
 }
 
 func trackOnlineIP(ctx context.Context, sm stats.Manager, email, ip string) {
@@ -413,7 +446,7 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 	if !destination.IsValid() {
 		panic("Dispatcher: Invalid destination.")
 	}
-	if err := enforceConnLimit(ctx); err != nil {
+	if err := enforceConnLimit(ctx, d.stats); err != nil {
 		return nil, err
 	}
 	outbounds := session.OutboundsFromContext(ctx)
@@ -473,7 +506,7 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 	if !destination.IsValid() {
 		return errors.New("Dispatcher: Invalid destination.")
 	}
-	if err := enforceConnLimit(ctx); err != nil {
+	if err := enforceConnLimit(ctx, d.stats); err != nil {
 		return err
 	}
 	outbounds := session.OutboundsFromContext(ctx)
@@ -582,6 +615,16 @@ func sniffer(ctx context.Context, cReader *cachedReader, metadataOnly bool, netw
 	return contentResult, contentErr
 }
 
+// userEgressTag returns the authenticated user's dedicated outbound, or empty
+// when routing must proceed normally.
+func userEgressTag(ctx context.Context) string {
+	inbound := session.InboundFromContext(ctx)
+	if inbound == nil || inbound.User == nil {
+		return ""
+	}
+	return inbound.User.EgressTag
+}
+
 func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.Link, destination net.Destination) {
 	outbounds := session.OutboundsFromContext(ctx)
 	ob := outbounds[len(outbounds)-1]
@@ -599,6 +642,17 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 			handler = h
 		} else {
 			errors.LogError(ctx, "non existing tag for platform initialized detour: ", forcedOutboundTag)
+			common.Close(link.Writer)
+			common.Interrupt(link.Reader)
+			return
+		}
+	} else if egressTag := userEgressTag(ctx); egressTag != "" {
+		if h := d.ohm.GetHandler(egressTag); h != nil {
+			isPickRoute = 1
+			errors.LogInfo(ctx, "taking dedicated egress [", egressTag, "] for [", destination, "]")
+			handler = h
+		} else {
+			errors.LogError(ctx, "non existing tag for dedicated egress: ", egressTag)
 			common.Close(link.Writer)
 			common.Interrupt(link.Reader)
 			return

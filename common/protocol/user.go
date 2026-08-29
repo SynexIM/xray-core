@@ -32,14 +32,21 @@ func (u *User) ToMemoryUser() (*MemoryUser, error) {
 	// 都自动拿到同一套限速，不需要各自实现一个 limits 访问方法。
 	// 运行时 AddUser 也只经过这一个入口，没有第二条路径能绕过去。
 	return &MemoryUser{
-		Account:             account,
-		Email:               u.Email,
-		Level:               u.Level,
-		BandwidthBps:        u.BandwidthBps,
-		ConnLimit:           u.ConnLimit,
-		CommittedBps:        u.CommittedBps,
-		CommittedBurstBytes: u.CommittedBurstBytes,
-		Class:               u.Class,
+		Account:              account,
+		Email:                u.Email,
+		Level:                u.Level,
+		BandwidthBps:         u.BandwidthBps,
+		ConnLimit:            u.ConnLimit,
+		CommittedBps:         u.CommittedBps,
+		CommittedBurstBytes:  u.CommittedBurstBytes,
+		Class:                u.Class,
+		UploadBandwidthBps:   u.UploadBandwidthBps,
+		UploadPeakBps:        u.UploadPeakBps,
+		UploadBurstBytes:     u.UploadBurstBytes,
+		DownloadBandwidthBps: u.DownloadBandwidthBps,
+		DownloadPeakBps:      u.DownloadPeakBps,
+		DownloadBurstBytes:   u.DownloadBurstBytes,
+		EgressTag:            u.EgressTag,
 	}, nil
 }
 
@@ -48,13 +55,20 @@ func ToProtoUser(mu *MemoryUser) *User {
 		return nil
 	}
 	u := &User{
-		Email:               mu.Email,
-		Level:               mu.Level,
-		BandwidthBps:        mu.BandwidthBps,
-		ConnLimit:           mu.ConnLimit,
-		CommittedBps:        mu.CommittedBps,
-		CommittedBurstBytes: mu.CommittedBurstBytes,
-		Class:               mu.Class,
+		Email:                mu.Email,
+		Level:                mu.Level,
+		BandwidthBps:         mu.BandwidthBps,
+		ConnLimit:            mu.ConnLimit,
+		CommittedBps:         mu.CommittedBps,
+		CommittedBurstBytes:  mu.CommittedBurstBytes,
+		Class:                mu.Class,
+		UploadBandwidthBps:   mu.UploadBandwidthBps,
+		UploadPeakBps:        mu.UploadPeakBps,
+		UploadBurstBytes:     mu.UploadBurstBytes,
+		DownloadBandwidthBps: mu.DownloadBandwidthBps,
+		DownloadPeakBps:      mu.DownloadPeakBps,
+		DownloadBurstBytes:   mu.DownloadBurstBytes,
+		EgressTag:            mu.EgressTag,
 	}
 	// Account 可以没有：socks/http/mixed 这类静态入站会把用户表示成一个
 	// 只带限速的 MemoryUser，密码另外放。序列化回去时必须容忍这一点，
@@ -73,12 +87,24 @@ type MemoryUser struct {
 	Level        uint32
 	BandwidthBps uint64
 	ConnLimit    uint32
-	// 双速率（可选，见 user.proto 与 RuntimeRateLimiters）：
-	// BandwidthBps 是 PIR，CommittedBps 是 CIR，CommittedBurstBytes 是 CBS。
+	// Symmetric PIR/CIR/CBS limits. These remain the source of truth whenever
+	// no directional field is set.
 	CommittedBps        uint64
 	CommittedBurstBytes uint64
 
-	// Class 标识共享同一争抢策略的客户组。策略表（weight / normal_cap / 突发信用）不在这里，
-	// 走 NodeFairScheduler.SetClassPolicies 整份下发，见 node_fairshare.go。
+	// Directional limits use independent committed/peak/burst buckets. Their
+	// presence switches only per-user shaping; class/fair scheduling remains
+	// orthogonal.
+	UploadBandwidthBps   uint64
+	UploadPeakBps        uint64
+	UploadBurstBytes     uint64
+	DownloadBandwidthBps uint64
+	DownloadPeakBps      uint64
+	DownloadBurstBytes   uint64
+
+	// EgressTag pins this authenticated user to an outbound. Empty routes normally.
+	EgressTag string
+
+	// Class identifies the shared fair-scheduling policy group.
 	Class string
 }

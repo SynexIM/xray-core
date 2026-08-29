@@ -18,41 +18,53 @@ const committedBurstWindowSeconds = 86400
 
 type runtimeLimiterState struct {
 	mu sync.Mutex
-	// 缓存 key：三个字段任一变化都要重建桶。
-	// 只比 bps 会导致「面板改了 CIR/CBS，节点上不生效」——而且改的人看不出来。
+	// Symmetric state preserves the existing PIR/CIR/CBS implementation.
 	bps      uint64
 	cir      uint64
 	cbs      uint64
 	limiters []*rate.Limiter
 	burst    int
+
+	// Directional state is used only when any directional field is present.
+	upload   runtimeDirectionalLimiterState
+	download runtimeDirectionalLimiterState
+}
+
+type runtimeDirectionalLimiterState struct {
+	bandwidthBps uint64
+	peakBps      uint64
+	burstBytes   uint64
+	limiters     []*rate.Limiter
+}
+
+// DirectionalRateLimiters is the one runtime-shaping seam used by dispatcher.
+// With no directional fields both directions intentionally receive the same
+// symmetric PIR/CIR/CBS buckets, preserving existing shared-token semantics.
+type DirectionalRateLimiters struct {
+	Upload   []*rate.Limiter
+	Download []*rate.Limiter
 }
 
 var runtimeLimiters sync.Map
 
-// RuntimeLimits returns the LayerX per-user runtime limits carried in memory.
-// Zero values mean unlimited and preserve upstream behavior.
+// RuntimeLimits returns the maximum user ceiling and connection cap. Zero
+// values mean unlimited and preserve upstream behavior.
 func (u *MemoryUser) RuntimeLimits() (bandwidthBps uint64, connLimit uint32) {
 	if u == nil {
 		return 0, 0
 	}
-	return u.BandwidthBps, u.ConnLimit
+	return u.runtimeCeilingBps(), u.ConnLimit
 }
 
-// HasRuntimeLimits 回答一个问题：这个用户身上有没有任何一条需要 dispatcher
-// 亲自整形的限制。
-//
-// 存在的理由是 splice：Linux 的 splice 在两个 socket 之间零拷贝直通，会绕过
-// dispatcher 挂在 link 上的限速包装器，所以「受限用户」必须强制走 buffered copy
-// （见 proxy.requiresBufferedCopy）。判断条件必须覆盖**所有**限速字段——
-// 只填 committed_bps 的用户 BandwidthBps 是 0，若只看 BandwidthBps，
-// 他会被判成不受限而走 splice，限速配了却一个字节都限不住。
-//
-// committed_burst_bytes 不在判断里：CBS 单独存在（没有 CIR）不构成任何限制。
+// HasRuntimeLimits reports whether the dispatcher must avoid the splice fast
+// path because any runtime shaper or connection cap is active.
 func (u *MemoryUser) HasRuntimeLimits() bool {
 	if u == nil {
 		return false
 	}
-	return u.BandwidthBps != 0 || u.ConnLimit != 0 || u.CommittedBps != 0
+	return u.BandwidthBps != 0 || u.ConnLimit != 0 || u.CommittedBps != 0 ||
+		u.UploadBandwidthBps != 0 || u.UploadPeakBps != 0 ||
+		u.DownloadBandwidthBps != 0 || u.DownloadPeakBps != 0
 }
 
 // RuntimeRateLimiters returns the user's shared token buckets, in the order the
@@ -99,6 +111,89 @@ func (u *MemoryUser) RuntimeRateLimiters(newLimiter func(bytesPerSecond, burstBy
 		state.cbs = u.CommittedBurstBytes
 	}
 	return state.limiters, state.burst
+}
+
+// RuntimeDirectionalRateLimiters returns the per-direction buckets dispatcher
+// must apply. Directional configuration uses independent legacy
+// committed/peak/burst buckets; otherwise both directions share the existing
+// symmetric PIR/CIR/CBS bucket chain exactly as before.
+func (u *MemoryUser) RuntimeDirectionalRateLimiters(newLimiter func(uint64, uint64) (*rate.Limiter, int)) DirectionalRateLimiters {
+	if u == nil {
+		return DirectionalRateLimiters{}
+	}
+	if !u.hasDirectionalLimits() {
+		limiters, _ := u.RuntimeRateLimiters(newLimiter)
+		return DirectionalRateLimiters{Upload: limiters, Download: limiters}
+	}
+	raw, ok := runtimeLimiters.Load(u)
+	if !ok {
+		raw, _ = runtimeLimiters.LoadOrStore(u, new(runtimeLimiterState))
+	}
+	state := raw.(*runtimeLimiterState)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return DirectionalRateLimiters{
+		Upload:   state.upload.update(u.UploadBandwidthBps, u.UploadPeakBps, u.UploadBurstBytes, newLimiter),
+		Download: state.download.update(u.DownloadBandwidthBps, u.DownloadPeakBps, u.DownloadBurstBytes, newLimiter),
+	}
+}
+
+func (s *runtimeDirectionalLimiterState) update(bandwidthBps, peakBps, burstBytes uint64, newLimiter func(uint64, uint64) (*rate.Limiter, int)) []*rate.Limiter {
+	if s.limiters == nil || s.bandwidthBps != bandwidthBps || s.peakBps != peakBps || s.burstBytes != burstBytes {
+		s.limiters = buildDirectionalRuntimeLimiters(bandwidthBps, peakBps, burstBytes, newLimiter)
+		s.bandwidthBps, s.peakBps, s.burstBytes = bandwidthBps, peakBps, burstBytes
+	}
+	return s.limiters
+}
+
+func buildDirectionalRuntimeLimiters(bandwidthBps, peakBps, burstBytes uint64, newLimiter func(uint64, uint64) (*rate.Limiter, int)) []*rate.Limiter {
+	committed := bitsPerSecondToRuntimeBytesPerSecond(bandwidthBps)
+	peak := bitsPerSecondToRuntimeBytesPerSecond(peakBps)
+	if committed == 0 {
+		if peak == 0 {
+			return nil
+		}
+		limiter, _ := newLimiter(peak, 0)
+		return []*rate.Limiter{limiter}
+	}
+	committedLimiter, _ := newLimiter(committed, burstBytes)
+	if peak == 0 {
+		return []*rate.Limiter{committedLimiter}
+	}
+	peakLimiter, _ := newLimiter(peak, 0)
+	return []*rate.Limiter{peakLimiter, committedLimiter}
+}
+
+func (u *MemoryUser) hasDirectionalLimits() bool {
+	return u.UploadBandwidthBps != 0 || u.UploadPeakBps != 0 || u.UploadBurstBytes != 0 ||
+		u.DownloadBandwidthBps != 0 || u.DownloadPeakBps != 0 || u.DownloadBurstBytes != 0
+}
+
+func (u *MemoryUser) runtimeCeilingBps() uint64 {
+	if u == nil {
+		return 0
+	}
+	if !u.hasDirectionalLimits() {
+		if u.BandwidthBps != 0 {
+			return u.BandwidthBps
+		}
+		return u.CommittedBps
+	}
+	return max64(directionCeilingBps(u.UploadBandwidthBps, u.UploadPeakBps), directionCeilingBps(u.DownloadBandwidthBps, u.DownloadPeakBps))
+}
+
+func directionCeilingBps(bandwidthBps, peakBps uint64) uint64 {
+	if peakBps != 0 {
+		return peakBps
+	}
+	return bandwidthBps
+}
+
+func max64(a, b uint64) uint64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // buildRuntimeLimiters 把三个业务字段翻成一串桶。返回的 int 是**第一个桶**的

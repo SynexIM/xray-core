@@ -23,11 +23,9 @@ message User {
   // instead of each protocol re-implementing a RuntimeLimits() account method.
   // 0 means unlimited. Bandwidth + connection cap + fair-share all key off the
   // resulting *MemoryUser, so the dispatcher enforces them with no protocol code.
-  // ⚠️ 单位陷阱（FR-079d）：这里的 `_bps` 是 **比特/秒**（业务单位，面板按 Mbps 展示后 ×1e6）。
-  // 而 app/fairshare/command/command.proto 里的 `_bps` 是 **字节/秒**。同一个后缀差 8 倍。
-  // 唯一的换算点是 common/protocol/user_limits.go 的 bitsPerSecondToRuntimeBytesPerSecond，
-  // 由 common/protocol/node_fairshare_units_test.go 钉死。新增速率字段一律带
-  // `_bit_per_sec` / `_byte_per_sec` 后缀，不许再用裸 `_bps`。
+  // Rate fields in this message, including the adopted directional `_bps`
+  // fields below, are business units in bit/s. Conversion to runtime byte/s is
+  // centralized in user_limits.go; fairshare command rates remain byte/s.
   uint64 bandwidth_bps = 4;
   uint32 conn_limit = 5;
 
@@ -55,4 +53,19 @@ message User {
   // app.fairshare.command 的 SetClassPolicy 整份下发，这里只带一个名字。
   // 空 = 未分类，落到 class 表里名字为空的那条兜底策略；没有兜底策略就是同权重、无 class 上限。
   string class = 8;
+
+  // Directional limits use the legacy committed/peak/burst contract in bit/s,
+  // bit/s, and bytes respectively. If any directional field is set, upload and
+  // download use separate buckets; otherwise fields 4, 6, and 7 retain the
+  // canonical symmetric PIR/CIR/CBS policy unchanged.
+  uint64 upload_bandwidth_bps = 9;
+  uint64 upload_peak_bps = 10;
+  uint64 upload_burst_bytes = 11;
+  uint64 download_bandwidth_bps = 12;
+  uint64 download_peak_bps = 13;
+  uint64 download_burst_bytes = 14;
+
+  // EgressTag pins this authenticated user to an outbound tag. Empty preserves
+  // normal routing.
+  string egress_tag = 15;
 }

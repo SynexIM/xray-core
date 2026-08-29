@@ -36,11 +36,9 @@ type User struct {
 	// instead of each protocol re-implementing a RuntimeLimits() account method.
 	// 0 means unlimited. Bandwidth + connection cap + fair-share all key off the
 	// resulting *MemoryUser, so the dispatcher enforces them with no protocol code.
-	// ⚠️ 单位陷阱（FR-079d）：这里的 `_bps` 是 **比特/秒**（业务单位，面板按 Mbps 展示后 ×1e6）。
-	// 而 app/fairshare/command/command.proto 里的 `_bps` 是 **字节/秒**。同一个后缀差 8 倍。
-	// 唯一的换算点是 common/protocol/user_limits.go 的 bitsPerSecondToRuntimeBytesPerSecond，
-	// 由 common/protocol/node_fairshare_units_test.go 钉死。新增速率字段一律带
-	// `_bit_per_sec` / `_byte_per_sec` 后缀，不许再用裸 `_bps`。
+	// Rate fields in this message, including the adopted directional `_bps`
+	// fields below, are business units in bit/s. Conversion to runtime byte/s is
+	// centralized in user_limits.go; fairshare command rates remain byte/s.
 	BandwidthBps uint64 `protobuf:"varint,4,opt,name=bandwidth_bps,json=bandwidthBps,proto3" json:"bandwidth_bps,omitempty"`
 	ConnLimit    uint32 `protobuf:"varint,5,opt,name=conn_limit,json=connLimit,proto3" json:"conn_limit,omitempty"`
 	// Dual-rate shaping (PIR / CIR / CBS). Optional on top of bandwidth_bps.
@@ -65,7 +63,20 @@ type User struct {
 	// 权重、normal_cap、突发信用不放在这里——它们是运营参数，走
 	// app.fairshare.command 的 SetClassPolicy 整份下发，这里只带一个名字。
 	// 空 = 未分类，落到 class 表里名字为空的那条兜底策略；没有兜底策略就是同权重、无 class 上限。
-	Class         string `protobuf:"bytes,8,opt,name=class,proto3" json:"class,omitempty"`
+	Class string `protobuf:"bytes,8,opt,name=class,proto3" json:"class,omitempty"`
+	// Directional limits use the legacy committed/peak/burst contract in bit/s,
+	// bit/s, and bytes respectively. If any directional field is set, upload and
+	// download use separate buckets; otherwise fields 4, 6, and 7 retain the
+	// canonical symmetric PIR/CIR/CBS policy unchanged.
+	UploadBandwidthBps   uint64 `protobuf:"varint,9,opt,name=upload_bandwidth_bps,json=uploadBandwidthBps,proto3" json:"upload_bandwidth_bps,omitempty"`
+	UploadPeakBps        uint64 `protobuf:"varint,10,opt,name=upload_peak_bps,json=uploadPeakBps,proto3" json:"upload_peak_bps,omitempty"`
+	UploadBurstBytes     uint64 `protobuf:"varint,11,opt,name=upload_burst_bytes,json=uploadBurstBytes,proto3" json:"upload_burst_bytes,omitempty"`
+	DownloadBandwidthBps uint64 `protobuf:"varint,12,opt,name=download_bandwidth_bps,json=downloadBandwidthBps,proto3" json:"download_bandwidth_bps,omitempty"`
+	DownloadPeakBps      uint64 `protobuf:"varint,13,opt,name=download_peak_bps,json=downloadPeakBps,proto3" json:"download_peak_bps,omitempty"`
+	DownloadBurstBytes   uint64 `protobuf:"varint,14,opt,name=download_burst_bytes,json=downloadBurstBytes,proto3" json:"download_burst_bytes,omitempty"`
+	// EgressTag pins this authenticated user to an outbound tag. Empty preserves
+	// normal routing.
+	EgressTag     string `protobuf:"bytes,15,opt,name=egress_tag,json=egressTag,proto3" json:"egress_tag,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -156,11 +167,60 @@ func (x *User) GetClass() string {
 	return ""
 }
 
+func (x *User) GetUploadBandwidthBps() uint64 {
+	if x != nil {
+		return x.UploadBandwidthBps
+	}
+	return 0
+}
+
+func (x *User) GetUploadPeakBps() uint64 {
+	if x != nil {
+		return x.UploadPeakBps
+	}
+	return 0
+}
+
+func (x *User) GetUploadBurstBytes() uint64 {
+	if x != nil {
+		return x.UploadBurstBytes
+	}
+	return 0
+}
+
+func (x *User) GetDownloadBandwidthBps() uint64 {
+	if x != nil {
+		return x.DownloadBandwidthBps
+	}
+	return 0
+}
+
+func (x *User) GetDownloadPeakBps() uint64 {
+	if x != nil {
+		return x.DownloadPeakBps
+	}
+	return 0
+}
+
+func (x *User) GetDownloadBurstBytes() uint64 {
+	if x != nil {
+		return x.DownloadBurstBytes
+	}
+	return 0
+}
+
+func (x *User) GetEgressTag() string {
+	if x != nil {
+		return x.EgressTag
+	}
+	return ""
+}
+
 var File_common_protocol_user_proto protoreflect.FileDescriptor
 
 const file_common_protocol_user_proto_rawDesc = "" +
 	"\n" +
-	"\x1acommon/protocol/user.proto\x12\x14xray.common.protocol\x1a!common/serial/typed_message.proto\"\xa1\x02\n" +
+	"\x1acommon/protocol/user.proto\x12\x14xray.common.protocol\x1a!common/serial/typed_message.proto\"\xdc\x04\n" +
 	"\x04User\x12\x14\n" +
 	"\x05level\x18\x01 \x01(\rR\x05level\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12:\n" +
@@ -170,7 +230,16 @@ const file_common_protocol_user_proto_rawDesc = "" +
 	"conn_limit\x18\x05 \x01(\rR\tconnLimit\x12#\n" +
 	"\rcommitted_bps\x18\x06 \x01(\x04R\fcommittedBps\x122\n" +
 	"\x15committed_burst_bytes\x18\a \x01(\x04R\x13committedBurstBytes\x12\x14\n" +
-	"\x05class\x18\b \x01(\tR\x05classB^\n" +
+	"\x05class\x18\b \x01(\tR\x05class\x120\n" +
+	"\x14upload_bandwidth_bps\x18\t \x01(\x04R\x12uploadBandwidthBps\x12&\n" +
+	"\x0fupload_peak_bps\x18\n" +
+	" \x01(\x04R\ruploadPeakBps\x12,\n" +
+	"\x12upload_burst_bytes\x18\v \x01(\x04R\x10uploadBurstBytes\x124\n" +
+	"\x16download_bandwidth_bps\x18\f \x01(\x04R\x14downloadBandwidthBps\x12*\n" +
+	"\x11download_peak_bps\x18\r \x01(\x04R\x0fdownloadPeakBps\x120\n" +
+	"\x14download_burst_bytes\x18\x0e \x01(\x04R\x12downloadBurstBytes\x12\x1d\n" +
+	"\n" +
+	"egress_tag\x18\x0f \x01(\tR\tegressTagB^\n" +
 	"\x18com.xray.common.protocolP\x01Z)github.com/xtls/xray-core/common/protocol\xaa\x02\x14Xray.Common.Protocolb\x06proto3"
 
 var (
