@@ -141,7 +141,13 @@ func (v *ShadowsocksServerConfig) Build() (proto.Message, error) {
 }
 
 func buildShadowsocks2022(v *ShadowsocksServerConfig) (proto.Message, error) {
-	if len(v.Users) == 0 {
+	// An omitted users/clients field means the traditional single-user mode.
+	// An explicitly present empty list means a multi-user listener with no
+	// customers yet. Dedicated-line nodes install their listener skeleton
+	// before the first customer; collapsing [] into single-user here creates a
+	// handler without UserManager, so the first runtime AddUser can never
+	// succeed without replacing the listener.
+	if v.Users == nil {
 		config := new(shadowsocks_2022.ServerConfig)
 		config.Method = v.Cipher
 		config.Key = v.Password
@@ -157,7 +163,7 @@ func buildShadowsocks2022(v *ShadowsocksServerConfig) (proto.Message, error) {
 		return nil, errors.New("shadowsocks 2022 (multi-user): only blake3-aes-*-gcm methods are supported")
 	}
 
-	if v.Users[0].Address == nil {
+	if len(v.Users) == 0 || v.Users[0].Address == nil {
 		config := new(shadowsocks_2022.MultiUserServerConfig)
 		config.Method = v.Cipher
 		config.Key = v.Password

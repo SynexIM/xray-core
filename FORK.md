@@ -36,6 +36,7 @@ proxy/http/users.go         给 http 协议补上客户端（email）管理
 | `app/proxyman/config.proto` | `SenderConfig.rate_limit_bit_per_sec`，每出站上下行合计共享的总速率 |
 | `app/proxyman/command/*` | `DrainInbound` `ResumeInbound` `BatchAlterInbound`；`AddUsersOperation` `RemoveUsersOperation`；卸载时清运行态；`SetOutboundRateLimitOperation` 热改出站总速率 |
 | `app/router/command/*` | `BatchAddRule` `BatchRemoveRule` `ListRuleFull` |
+| `app/router/router.go` | 热更新规则使用读写锁；连接选路与增删/重载不再并发读写规则切片 |
 | `app/reverse/*` | Reverse 加锁 + 存 dispatcher/ohm，开放 bridge/portal 的增删查 |
 | `app/policy/*` | `user_site` 开关（按站点计流量，默认关——域名基数无上限） |
 | `common/session/session.go` | `DialedRemoteAddr`（访问日志补齐目标 IP 用） |
@@ -44,6 +45,8 @@ proxy/http/users.go         给 http 协议补上客户端（email）管理
 | `proxy/http/*` | 客户端管理与限速 |
 | `proxy/vless/inbound/inbound.go` | 删用户时重置限速器与连接数 |
 | `proxy/socks/config.proto` `proxy/http/config.proto` | `UserAccount` 也带双速率字段与 `class` |
+| `infra/conf/shadowsocks.go` | 显式 `clients: []` 保留 SS2022 空多用户 handler，首位客户可走运行时热添加 |
+| `testing/scenarios/socks_test.go` | 真进程热添加 SOCKS 用户后按墙钟验证带宽上限，覆盖 Linux splice 路径 |
 | `proxy/shadowsocks_2022/config.proto` | `RelayDestination` 带四个限速字段与 `class`（relay 没有 User 消息） |
 | `proxy/shadowsocks_2022/inbound_multi.go` | email→下标索引；`AddUsers`/`RemoveUsers` 批量入口 |
 | `proxy/shadowsocks/validator.go` `proxy/vmess/validator.go` | email→下标索引，`Del`/`Remove` 从 O(N) 变 O(1) |

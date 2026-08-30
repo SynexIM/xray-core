@@ -24,7 +24,7 @@ type Router struct {
 	ctx        context.Context
 	ohm        outbound.Manager
 	dispatcher routing.Dispatcher
-	mu         sync.Mutex
+	mu         sync.RWMutex
 }
 
 // Route is an implementation of routing.Route.
@@ -99,6 +99,9 @@ func (r *Router) Init(ctx context.Context, config *Config, d dns.Client, ohm out
 
 // PickRoute implements routing.Router.
 func (r *Router) PickRoute(ctx routing.Context) (routing.Route, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	originalCtx := ctx
 	rule, ctx, err := r.pickRouteInternal(ctx)
 	if err != nil {
@@ -238,8 +241,8 @@ func (r *Router) RemoveRule(tag string) error {
 
 // ListRule implements routing.Router
 func (r *Router) ListRule() []routing.Route {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	ruleList := make([]routing.Route, 0)
 	for _, rule := range r.rules {
 		ruleList = append(ruleList, &Route{
