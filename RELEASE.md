@@ -15,5 +15,17 @@ Every published release must include:
 Release xray-core before releasing 3x-ui. The panel release workflow must pin
 the exact xray-core release tag instead of downloading an upstream binary.
 
+## How the assets actually get there
+
+`.github/workflows/release.yml` uploads archives only on a `release: published`
+event. Pushing a tag alone produces a Release with **zero** assets, and 3x-ui
+then fails at `wget Xray-linux-64.zip`. Create the GitHub Release from the tag,
+then confirm the run triggered by that publish finished green and that the
+Release lists every `Xray-*.zip` plus its `.dgst`.
+
+Building requires `github.com/SynexIM/reality` to be readable. It is a public
+repository; MPL-2.0 requires that once these binaries are published. CI accepts
+an optional `PRIVATE_MODULE_TOKEN` but no longer depends on one.
+
 Never move an existing stable tag or overwrite a published release asset. To
 roll back, select the previous immutable release and its matching image tag.

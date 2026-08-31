@@ -415,12 +415,12 @@ CIR）在公平分配里被当成无天花板：拥挤时他分到一份自己�
 
 两件事跟着这个替换走：
 
-- **它是私有仓**，所以 CI 需要 `PRIVATE_MODULE_TOKEN`（只需 `SynexIM/reality`
-  的读权限）。四个用 Go 的 workflow 都加了同一个凭据步骤，缺了会直接失败而不是
-  悄悄走到构建阶段才报错。本地构建用 `GOPRIVATE=github.com/SynexIM/*`。
+- **`SynexIM/reality` 必须是公开仓。** 本仓公开发版之后，任何人 `go build` 都要能拉到
+  它；私有仓会让这个 fork 变成「源码给了但编不出来」。CI 里那一步凭据因此只是可选的
+  兜底：设了 `PRIVATE_MODULE_TOKEN`（只需 `SynexIM/reality` 读权限）就用它，没设就匿名拉，
+  **不再因为缺 secret 直接失败**。本地对私有仓构建用 `GOPRIVATE=github.com/SynexIM/*`。
 - **`tls.go` 受 MPL 2.0 覆盖。** MPL 要求分发可执行形式时，向接收方提供被修改文件的
-  源码。目前二进制只下发到我们自己的节点，不构成对外分发；如果将来把节点二进制交给
-  客户或第三方，这一条要重新看——把那个 fork 公开是最省事的满足方式。
+  源码。一旦 Release 对外可下载，这就是对外分发，公开那个 fork 不是省事，是必须。
 
 ## 有意不改的
 
