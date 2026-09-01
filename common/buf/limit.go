@@ -17,12 +17,14 @@ type RateLimitReader struct {
 	Reader
 	ctx      context.Context
 	limiters []*rate.Limiter
+	bypass   func() bool
 }
 
 type RateLimitWriter struct {
 	Writer
 	ctx      context.Context
 	limiters []*rate.Limiter
+	bypass   func() bool
 }
 
 func NewRateLimitReader(ctx context.Context, reader Reader, bytesPerSecond uint64) Reader {
@@ -68,6 +70,20 @@ func clampBurst(burstBytes uint64) int {
 // 共享的）桶上占配额（消除共享桶 FIFO 队头阻塞的最坏形态）。ctx 为 nil 时退化为
 // Background（不取消，仅兜底，调用方应传连接 ctx）。
 func NewRateLimitReaderWithLimiter(ctx context.Context, reader Reader, limiters ...*rate.Limiter) Reader {
+	return NewAdaptiveRateLimitReaderWithLimiter(
+		ctx, reader, nil, limiters...,
+	)
+}
+
+// NewAdaptiveRateLimitReaderWithLimiter keeps the ordinary per-user buckets
+// attached but may bypass them dynamically. Bandwidth-reservation membership
+// changes therefore affect established connections without rebuilding links.
+func NewAdaptiveRateLimitReaderWithLimiter(
+	ctx context.Context,
+	reader Reader,
+	bypass func() bool,
+	limiters ...*rate.Limiter,
+) Reader {
 	live := compactLimiters(limiters)
 	if len(live) == 0 {
 		return reader
@@ -76,10 +92,22 @@ func NewRateLimitReaderWithLimiter(ctx context.Context, reader Reader, limiters 
 		Reader:   reader,
 		ctx:      ctx,
 		limiters: live,
+		bypass:   bypass,
 	}
 }
 
 func NewRateLimitWriterWithLimiter(ctx context.Context, writer Writer, limiters ...*rate.Limiter) Writer {
+	return NewAdaptiveRateLimitWriterWithLimiter(
+		ctx, writer, nil, limiters...,
+	)
+}
+
+func NewAdaptiveRateLimitWriterWithLimiter(
+	ctx context.Context,
+	writer Writer,
+	bypass func() bool,
+	limiters ...*rate.Limiter,
+) Writer {
 	live := compactLimiters(limiters)
 	if len(live) == 0 {
 		return writer
@@ -88,6 +116,7 @@ func NewRateLimitWriterWithLimiter(ctx context.Context, writer Writer, limiters 
 		Writer:   writer,
 		ctx:      ctx,
 		limiters: live,
+		bypass:   bypass,
 	}
 }
 
@@ -140,6 +169,9 @@ func (r *RateLimitReader) readWithTimeout(timeout time.Duration, withTimeout boo
 	if mb.IsEmpty() {
 		return mb, err
 	}
+	if r.bypass != nil && r.bypass() {
+		return mb, err
+	}
 	if waitErr := rateLimitWaitN(r.ctx, r.limiters, int(mb.Len())); waitErr != nil && err == nil {
 		return mb, waitErr
 	}
@@ -148,6 +180,9 @@ func (r *RateLimitReader) readWithTimeout(timeout time.Duration, withTimeout boo
 
 func (w *RateLimitWriter) WriteMultiBuffer(mb MultiBuffer) error {
 	if mb.IsEmpty() {
+		return w.Writer.WriteMultiBuffer(mb)
+	}
+	if w.bypass != nil && w.bypass() {
 		return w.Writer.WriteMultiBuffer(mb)
 	}
 	if err := rateLimitWaitN(w.ctx, w.limiters, int(mb.Len())); err != nil {

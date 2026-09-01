@@ -67,6 +67,17 @@ message ClassPolicy {
   // 与全局软地板取较大者，且仍受「地板×活跃人数 ≤ root_cap 才生效」的前提约束（FR-077）。
   // 0 = 该 class 无专属地板。
   uint32 floor_ratio_percent = 6;
+
+  // An admitted reservation is an aggregate floor for all active members of
+  // this class, not a per-user cap. Unused capacity immediately returns to the
+  // node pool; excess demand may still compete for spare capacity.
+  uint64 upload_reserved_byte_per_sec = 7;
+  uint64 download_reserved_byte_per_sec = 8;
+
+  // Stable Client UIDs in this reservation. Runtime membership is keyed by
+  // User.email (the Client UID), so creation/removal affects established
+  // connections without waiting for them to re-authenticate.
+  repeated string member_ids = 9;
 }
 
 message SetClassPolicyRequest {

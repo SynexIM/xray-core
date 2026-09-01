@@ -172,8 +172,17 @@ type ClassPolicy struct {
 	// 与全局软地板取较大者，且仍受「地板×活跃人数 ≤ root_cap 才生效」的前提约束（FR-077）。
 	// 0 = 该 class 无专属地板。
 	FloorRatioPercent uint32 `protobuf:"varint,6,opt,name=floor_ratio_percent,json=floorRatioPercent,proto3" json:"floor_ratio_percent,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// An admitted reservation is an aggregate floor for all active members of
+	// this class, not a per-user cap. Unused capacity immediately returns to the
+	// node pool; excess demand may still compete for spare capacity.
+	UploadReservedBytePerSec   uint64 `protobuf:"varint,7,opt,name=upload_reserved_byte_per_sec,json=uploadReservedBytePerSec,proto3" json:"upload_reserved_byte_per_sec,omitempty"`
+	DownloadReservedBytePerSec uint64 `protobuf:"varint,8,opt,name=download_reserved_byte_per_sec,json=downloadReservedBytePerSec,proto3" json:"download_reserved_byte_per_sec,omitempty"`
+	// Stable Client UIDs in this reservation. Runtime membership is keyed by
+	// User.email (the Client UID), so creation/removal affects established
+	// connections without waiting for them to re-authenticate.
+	MemberIds     []string `protobuf:"bytes,9,rep,name=member_ids,json=memberIds,proto3" json:"member_ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ClassPolicy) Reset() {
@@ -246,6 +255,27 @@ func (x *ClassPolicy) GetFloorRatioPercent() uint32 {
 		return x.FloorRatioPercent
 	}
 	return 0
+}
+
+func (x *ClassPolicy) GetUploadReservedBytePerSec() uint64 {
+	if x != nil {
+		return x.UploadReservedBytePerSec
+	}
+	return 0
+}
+
+func (x *ClassPolicy) GetDownloadReservedBytePerSec() uint64 {
+	if x != nil {
+		return x.DownloadReservedBytePerSec
+	}
+	return 0
+}
+
+func (x *ClassPolicy) GetMemberIds() []string {
+	if x != nil {
+		return x.MemberIds
+	}
+	return nil
 }
 
 type SetClassPolicyRequest struct {
@@ -516,14 +546,18 @@ const file_app_fairshare_command_command_proto_rawDesc = "" +
 	"\x18congestion_enter_percent\x18\x04 \x01(\rR\x16congestionEnterPercent\x126\n" +
 	"\x17congestion_exit_percent\x18\x05 \x01(\rR\x15congestionExitPercent\x122\n" +
 	"\x15congestion_exit_ticks\x18\x06 \x01(\rR\x13congestionExitTicks\"\x1a\n" +
-	"\x18SetNodeBandwidthResponse\"\x81\x02\n" +
+	"\x18SetNodeBandwidthResponse\"\xa4\x03\n" +
 	"\vClassPolicy\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06weight\x18\x02 \x01(\rR\x06weight\x124\n" +
 	"\x17normal_cap_byte_per_sec\x18\x03 \x01(\x04R\x13normalCapBytePerSec\x122\n" +
 	"\x16burst_cap_byte_per_sec\x18\x04 \x01(\x04R\x12burstCapBytePerSec\x12,\n" +
 	"\x12burst_credit_bytes\x18\x05 \x01(\x04R\x10burstCreditBytes\x12.\n" +
-	"\x13floor_ratio_percent\x18\x06 \x01(\rR\x11floorRatioPercent\"Z\n" +
+	"\x13floor_ratio_percent\x18\x06 \x01(\rR\x11floorRatioPercent\x12>\n" +
+	"\x1cupload_reserved_byte_per_sec\x18\a \x01(\x04R\x18uploadReservedBytePerSec\x12B\n" +
+	"\x1edownload_reserved_byte_per_sec\x18\b \x01(\x04R\x1adownloadReservedBytePerSec\x12\x1d\n" +
+	"\n" +
+	"member_ids\x18\t \x03(\tR\tmemberIds\"Z\n" +
 	"\x15SetClassPolicyRequest\x12A\n" +
 	"\aclasses\x18\x01 \x03(\v2'.xray.app.fairshare.command.ClassPolicyR\aclasses\"\x18\n" +
 	"\x16SetClassPolicyResponse\"\x12\n" +

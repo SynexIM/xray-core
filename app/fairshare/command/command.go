@@ -40,12 +40,15 @@ func toClassPolicies(in []*ClassPolicy) []*protocol.ClassPolicy {
 			continue
 		}
 		out = append(out, &protocol.ClassPolicy{
-			Name:                c.GetName(),
-			Weight:              c.GetWeight(),
-			NormalCapBytePerSec: c.GetNormalCapBytePerSec(),
-			BurstCapBytePerSec:  c.GetBurstCapBytePerSec(),
-			BurstCreditBytes:    c.GetBurstCreditBytes(),
-			FloorRatioPercent:   c.GetFloorRatioPercent(),
+			Name:                       c.GetName(),
+			Weight:                     c.GetWeight(),
+			NormalCapBytePerSec:        c.GetNormalCapBytePerSec(),
+			BurstCapBytePerSec:         c.GetBurstCapBytePerSec(),
+			BurstCreditBytes:           c.GetBurstCreditBytes(),
+			FloorRatioPercent:          c.GetFloorRatioPercent(),
+			UploadReservedBytePerSec:   c.GetUploadReservedBytePerSec(),
+			DownloadReservedBytePerSec: c.GetDownloadReservedBytePerSec(),
+			MemberIDs:                  append([]string(nil), c.GetMemberIds()...),
 		})
 	}
 	return out

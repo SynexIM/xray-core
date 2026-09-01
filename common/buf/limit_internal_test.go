@@ -8,6 +8,14 @@ import (
 	"golang.org/x/time/rate"
 )
 
+type repeatingRateLimitReader struct {
+	size int
+}
+
+func (r repeatingRateLimitReader) ReadMultiBuffer() (MultiBuffer, error) {
+	return MergeBytes(nil, make([]byte, r.size)), nil
+}
+
 // burst = 1/8 秒配额（125ms 窗口），floor 到单次读缓冲 Size——锯齿修复的核心参数。
 func TestRateLimitBurstWindow(t *testing.T) {
 	if got := rateLimitBurst(1_000_000); got != 125_000 {
@@ -120,5 +128,32 @@ func TestRateLimitWrappersDropNilLimiters(t *testing.T) {
 	}
 	if len(rl.limiters) != 1 || rl.limiters[0] != limiter {
 		t.Errorf("nil 没被丢掉：limiters = %v", rl.limiters)
+	}
+}
+
+func TestAdaptiveRateLimitBypassChangesOnEstablishedWrapper(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	bypassed := false
+	limiter := rate.NewLimiter(rate.Limit(1), Size)
+	reader := NewAdaptiveRateLimitReaderWithLimiter(
+		ctx,
+		repeatingRateLimitReader{size: 2 * Size},
+		func() bool { return bypassed },
+		limiter,
+	)
+	first, err := reader.ReadMultiBuffer()
+	first = ReleaseMulti(first)
+	if err == nil {
+		t.Fatal("ordinary per-user limiter was unexpectedly bypassed")
+	}
+
+	// Same wrapper, same already-cancelled connection context: a live
+	// reservation membership switch must bypass the old per-user bucket.
+	bypassed = true
+	second, err := reader.ReadMultiBuffer()
+	second = ReleaseMulti(second)
+	if err != nil {
+		t.Fatalf("dynamic reservation bypass did not take effect: %v", err)
 	}
 }
