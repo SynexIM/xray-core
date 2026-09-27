@@ -341,6 +341,16 @@ func fairOwnDirectionalLimitBytesPerSecond(
 	if user == nil {
 		return 0
 	}
+	// 三级限速用户的天花板是突发速率：把公平桶钉在标准速率会压住整形器的突发，
+	// 突发信用也就永远花不掉、持续档永远到不了（整形器只按自己放行的字节记账）。
+	if user.UsesTierShaping() {
+		up, down := user.TierPolicies()
+		p := down
+		if direction == fairUpload {
+			p = up
+		}
+		return max(p.Standard, p.Burst)
+	}
 	if !user.hasDirectionalLimits() {
 		return fairOwnLimitBytesPerSecond(user)
 	}

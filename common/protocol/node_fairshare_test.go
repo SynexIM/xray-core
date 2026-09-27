@@ -731,3 +731,20 @@ func itoa(i int) string {
 	}
 	return string(b[p:])
 }
+
+// 三级限速用户的节点公平天花板是突发速率；钉在标准速率会让突发和持续档都静默失效。
+func TestTierUserCeilingIsBurstRate(t *testing.T) {
+	s := newSched(1_000_000_000)
+	u := &MemoryUser{
+		Email: "tier", DownloadBandwidthBps: 80_000_000, UploadBandwidthBps: 20_000_000,
+		BurstBitPerSec: 160_000_000, BurstCreditBytes: 16_000_000,
+		SustainedBitPerSec: 10_000_000, SustainedAfterSeconds: 5,
+	}
+	up, down := s.Member(u)
+	if got := uint64(down.Limit()); got != 20_000_000 {
+		t.Errorf("download ceiling: want 20000000 (burst), got %d", got)
+	}
+	if got := uint64(up.Limit()); got != 20_000_000 {
+		t.Errorf("upload ceiling: want 20000000 (symmetric burst), got %d", got)
+	}
+}
