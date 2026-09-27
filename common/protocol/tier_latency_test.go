@@ -61,7 +61,10 @@ func TestTierShaperAddedLatencyUnderLoad(t *testing.T) {
 		rate      uint64 // byte/s
 		congested uint64 // >0: 节点拥塞，池份额压到这个值
 		stream    uint64 // 推流速率 byte/s，须低于它在池里的公平份额（高于份额就是被限速，不是抖动）
+		bulk      int    // 满载连接数
 	}{
+		// 独占池的一条满载连接自己也算稀疏（份额 = 整池）：它的大片不能挡住小包。
+		{name: "20M pool one bulk flow", rate: 20 * mbit, stream: 5 * mbit, bulk: 1},
 		{name: "20M pool saturated", rate: 20 * mbit, stream: 5 * mbit},
 		{name: "100M pool saturated", rate: 100 * mbit, stream: 5 * mbit},
 		{name: "congested heavy pool 10M share", rate: 100 * mbit, congested: 10 * mbit, stream: 2 * mbit},
@@ -73,7 +76,11 @@ func TestTierShaperAddedLatencyUnderLoad(t *testing.T) {
 				s.setShare(true, tc.congested)
 			}
 			ctx, cancel := context.WithCancel(context.Background())
-			bulk := saturate(ctx, s, 2, 8<<10)
+			flows := tc.bulk
+			if flows == 0 {
+				flows = 2
+			}
+			bulk := saturate(ctx, s, flows, 64<<10)
 			time.Sleep(200 * time.Millisecond)
 
 			var ping, stream []time.Duration
