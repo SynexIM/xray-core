@@ -22,16 +22,23 @@ import (
 //
 // 为什么不用 rate.Limiter.WaitN：它的预约是全局 FIFO，一条连接预约走 125ms 的令牌后，
 // 同池另一条连接的一个小包也得排在后面——这就是直播卡、起步慢的队头阻塞。这里是
-// 「令牌桶深度 = 一个 25ms 量子 + 按连接的起始时间公平排队（SFQ）」：
+// 「令牌桶 + 稀疏流优先（DRR++ / FQ-CoDel 的 sparse flow）+ 满载流按字节公平（SFQ）」：
 //
-//	量子      桶深 = 当前速率 × 25ms，单次放行半个量子，欠账不超过一个量子
-//	公平      每条连接一个 flow，按虚拟起始标签出队；满载连接之间按字节轮转
-//	稀疏优先  空闲后回来的连接（含新连接）起始标签 = 当前虚拟时间，可带一个量子的
-//	          欠账立即放行——首包不等待，空闲连接 RTT 增量 ≤ 一个量子
-//	无全局锁  锁只保护记账，等待走各自的 channel，由一个 AfterFunc 定时器按令牌到期派发
+//	稀疏流    一条连接最近的用量低于「池速率 ÷ (排队连接数 + 1)」这份公平份额时算稀疏：
+//	          游戏/交互小包、低于份额的推流、新连接首包。稀疏流不排队，直接放行，
+//	          池令牌可以因此欠账，欠账上限一个量子（25ms 的速率）；欠账由满载流等着还。
+//	          只有稀疏流自己合计就超过池速率、欠账顶到上限时才排队，且排在满载流前面。
+//	满载流    按虚拟起始标签出队，每片 5ms 的速率；满载连接之间按字节轮转。
+//	总量      任意时段放行 ≤ 速率 × 时长 + 桶深（一个量子）+ 欠账上限（一个量子）。
+//	无全局锁  锁只保护记账，等待走各自的 channel，由一个 AfterFunc 定时器按令牌到期派发。
+//
+// 按连接而不是按外层连接：mux / XUDP / HY2 的每条内层流都各自经 dispatcher 建一条 link、
+// 各拿一个 TierFlow，所以同一外层连接里的游戏包不会排在大下载后面。
 const (
 	tierQuantum        = 25 * time.Millisecond
+	tierSlice          = 5 * time.Millisecond
 	tierMinQuantumByte = 3000
+	tierMinSliceByte   = 1500
 	tierMaxIdleTTL     = time.Hour
 )
 
@@ -196,6 +203,9 @@ type TierShaper struct {
 	queue  tierQueue
 	timer  *time.Timer
 	armed  bool
+	// 近期有用量的连接（used 还没漏完）；公平份额 = 速率 ÷ 活跃连接数。
+	active    map[*TierFlow]struct{}
+	lastSweep time.Time
 
 	// 调度器写：拥挤时的份额（byte/s）。congested=false 时 share 不起作用。
 	congested bool
@@ -207,7 +217,7 @@ type TierShaper struct {
 }
 
 func newTierShaper() *TierShaper {
-	return &TierShaper{last: time.Now()}
+	return &TierShaper{last: time.Now(), active: map[*TierFlow]struct{}{}}
 }
 
 // Configure 换策略不换对象：已排队的连接按新速率继续派发。额度只截断不补发，
@@ -271,6 +281,41 @@ func quantumBytesAt(rate float64) float64 {
 
 func (s *TierShaper) quantumBytes() float64 { return quantumBytesAt(s.rate) }
 
+// sliceBytes 是满载流单次出队的量：越小，满载流之间轮转越细。
+func (s *TierShaper) sliceBytes() int {
+	return int(max(s.rate*tierSlice.Seconds(), tierMinSliceByte))
+}
+
+// fairRate 是一条连接此刻的公平份额（字节/秒）。
+func (s *TierShaper) fairRate() float64 { return s.rate / float64(max(len(s.active), 1)) }
+
+// meter 按公平份额把连接的近期用量往下漏，漏完为零。
+func (s *TierShaper) meter(f *TierFlow, now time.Time) {
+	if dt := now.Sub(f.at).Seconds(); dt > 0 {
+		f.used = max(0, f.used-s.fairRate()*dt)
+		f.at = now
+	}
+}
+
+// sweep 把用量漏完的连接移出活跃集，最多每毫秒一次。
+func (s *TierShaper) sweep(now time.Time) {
+	if now.Sub(s.lastSweep) < time.Millisecond {
+		return
+	}
+	s.lastSweep = now
+	for f := range s.active {
+		s.meter(f, now)
+		if f.used == 0 && !f.waiting {
+			delete(s.active, f)
+		}
+	}
+}
+
+// sparse：连接近期用量加上这一片，仍在一个量子的公平份额以内。
+func (s *TierShaper) sparse(f *TierFlow, chunk int) bool {
+	return f.used+float64(chunk) <= max(s.fairRate()*tierQuantum.Seconds(), tierMinQuantumByte)
+}
+
 // advance 按上次结算以来的时间回填令牌与额度，并按当下的额度重选速率。
 func (s *TierShaper) advance(now time.Time) {
 	dt := now.Sub(s.last).Seconds()
@@ -316,26 +361,43 @@ func (s *TierShaper) updateRate() {
 	s.tokens = min(max(s.tokens, -s.quantumBytes()), s.quantumBytes())
 }
 
-func (s *TierShaper) grantLocked(start uint64, n int) {
+func (s *TierShaper) grantLocked(f *TierFlow, n int) {
 	s.tokens -= float64(n)
 	s.granted += uint64(n)
 	if s.p.burstOn() {
 		s.credit = max(0, s.credit-float64(n))
 	}
-	s.vtime = max(s.vtime, start)
+	f.used += float64(n)
+	s.active[f] = struct{}{}
 }
 
-// dispatchLocked 在令牌为正时按起始标签依次放行，放不完就把定时器拨到令牌转正那一刻。
+// ready 报告队首现在能不能放：稀疏等待者只要欠账不超上限，满载等待者要令牌为正。
+func (s *TierShaper) ready(w *tierWaiter) bool {
+	if w.sparse {
+		return s.tokens-float64(w.n) >= -s.quantumBytes()
+	}
+	return s.tokens > 0
+}
+
+// dispatchLocked 按队首依次放行，放不完就把定时器拨到队首可放的那一刻。
 func (s *TierShaper) dispatchLocked() {
-	for s.queue.Len() > 0 && (s.rate == 0 || s.tokens > 0) {
+	for s.queue.Len() > 0 && (s.rate == 0 || s.ready(s.queue[0])) {
 		w := heap.Pop(&s.queue).(*tierWaiter)
-		s.grantLocked(w.start, w.n)
+		w.flow.waiting = false
+		s.grantLocked(w.flow, w.n)
+		if !w.sparse {
+			s.vtime = max(s.vtime, w.start)
+		}
 		close(w.ready)
 	}
 	if s.queue.Len() == 0 || s.armed {
 		return
 	}
-	delay := time.Duration((1 - s.tokens) / s.rate * float64(time.Second))
+	need := 1.0
+	if head := s.queue[0]; head.sparse {
+		need = float64(head.n) - s.quantumBytes()
+	}
+	delay := time.Duration(max(need-s.tokens, 1) / s.rate * float64(time.Second))
 	s.armed = true
 	if s.timer == nil {
 		s.timer = time.AfterFunc(delay, s.onTimer)
@@ -357,44 +419,53 @@ func (s *TierShaper) NewFlow() *TierFlow {
 	if s == nil {
 		return nil
 	}
-	return &TierFlow{s: s}
+	return &TierFlow{s: s, at: time.Now()}
 }
 
-// TierFlow 是一条连接在整形器里的身份；finish 是它的虚拟结束标签。
+// TierFlow 是一条连接在整形器里的身份：finish 是满载时的虚拟结束标签，used 是按公平份额
+// 漏掉的近期用量（判稀疏用）。一条连接一个方向同一时刻只有一个 Wait。
 type TierFlow struct {
-	s      *TierShaper
-	finish uint64
+	s       *TierShaper
+	finish  uint64
+	used    float64
+	at      time.Time
+	waiting bool
 }
 
-// Wait 阻塞到 n 字节全部被放行。大请求按量子切片，每片单独排队，所以满载连接之间
-// 按量子轮转，另一条连接的小包最多等一个量子。
+// Wait 阻塞到 n 字节全部被放行。稀疏连接直接放行（池欠账），满载连接按 5ms 的片排队轮转。
 func (f *TierFlow) Wait(ctx context.Context, n int) error {
 	s := f.s
 	for n > 0 {
 		s.mu.Lock()
-		s.advance(time.Now())
+		now := time.Now()
+		s.advance(now)
 		if s.rate == 0 {
 			// 不限速也记账：调度器要靠它判断节点忙不忙。
 			s.granted += uint64(n)
 			s.mu.Unlock()
 			return nil
 		}
-		// 半量子切片 + 欠账不超过一个量子：排队者最坏等一个量子，稀疏连接通常立即放行。
-		quantum := s.quantumBytes()
-		chunk := min(n, int(quantum/2))
-		start := max(s.vtime, f.finish)
-		f.finish = start + uint64(chunk)
-		fresh := start == s.vtime
-		if (s.queue.Len() == 0 && s.tokens > 0) || (fresh && s.tokens-float64(chunk) >= -quantum) {
-			s.grantLocked(start, chunk)
+		s.sweep(now)
+		s.meter(f, now)
+		chunk := min(n, s.sliceBytes())
+		sparse := s.sparse(f, chunk)
+		free := s.queue.Len() == 0 && s.tokens > 0
+		if free || (sparse && !s.sparseQueued() && s.tokens-float64(chunk) >= -s.quantumBytes()) {
+			s.grantLocked(f, chunk)
 			s.mu.Unlock()
 			n -= chunk
 			continue
 		}
 		s.seq++
 		s.waits++
-		w := &tierWaiter{start: start, seq: s.seq, n: chunk, ready: make(chan struct{})}
+		w := &tierWaiter{flow: f, sparse: sparse, seq: s.seq, n: chunk, ready: make(chan struct{})}
+		if !sparse {
+			w.start = max(s.vtime, f.finish)
+			f.finish = w.start + uint64(chunk)
+		}
 		heap.Push(&s.queue, w)
+		f.waiting = true
+		s.active[f] = struct{}{}
 		s.dispatchLocked()
 		s.mu.Unlock()
 		select {
@@ -404,6 +475,7 @@ func (f *TierFlow) Wait(ctx context.Context, n int) error {
 			s.mu.Lock()
 			if w.index >= 0 {
 				heap.Remove(&s.queue, w.index)
+				f.waiting = false
 			}
 			s.mu.Unlock()
 			return ctx.Err()
@@ -412,7 +484,14 @@ func (f *TierFlow) Wait(ctx context.Context, n int) error {
 	return nil
 }
 
+// sparseQueued：已经有稀疏等待者（稀疏合计超了池速率），新来的稀疏片按先来后到排在它后面。
+func (s *TierShaper) sparseQueued() bool {
+	return s.queue.Len() > 0 && s.queue[0].sparse
+}
+
 type tierWaiter struct {
+	flow       *TierFlow
+	sparse     bool
 	start, seq uint64
 	n          int
 	index      int
@@ -423,6 +502,9 @@ type tierQueue []*tierWaiter
 
 func (q tierQueue) Len() int { return len(q) }
 func (q tierQueue) Less(i, j int) bool {
+	if q[i].sparse != q[j].sparse {
+		return q[i].sparse
+	}
 	if q[i].start != q[j].start {
 		return q[i].start < q[j].start
 	}

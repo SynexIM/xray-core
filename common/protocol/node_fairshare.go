@@ -27,7 +27,8 @@ import (
 // 活跃判定：本 tick 有排过队 = backlogged（还想要更多，需求按标准算）；没排过队 = satisfied
 // （需求 = 实测 + 1/8 余量）。只有活跃的池参与注水。
 //
-// 额度总量契约：只要进入约束态（有池被份额压住），Σ 份额 ≤ root_cap。
+// 额度总量契约：只要进入约束态（有池被份额压住），排队池的份额加未排队池的实测需求 ≤ root_cap；
+// 未排队的池份额抬到同层水位，这部分余量不预留（见 fill）。
 //
 // 所有参数由控制面下发，0 一律是「没有这一项」，这里不藏任何默认值。
 type NodeFairScheduler struct {
@@ -444,13 +445,26 @@ func (s *NodeFairScheduler) fill(slots []*fairSlot, root uint64, upload bool) fi
 			normal = append(normal, m)
 		}
 	}
-	remaining, normalOut, normalConstrained := waterFill(normal, remaining)
-	_, heavyOut, heavyConstrained := waterFill(heavy, remaining)
+	remaining, normalOut, normalConstrained, normalLevel := waterFill(normal, remaining)
+	_, heavyOut, heavyConstrained, heavyLevel := waterFill(heavy, remaining)
 	if !normalConstrained && !heavyConstrained {
 		// 谁也没被压住：节点其实不挤，别拿上一 tick 的实测把人钉死。
 		for _, m := range slots {
 			m.alloc = m.ceiling
 		}
+	} else {
+		// 没排队的池（打网页、游戏、低于份额的推流）不按上一秒实测钉死，放到同层水位：
+		// 否则一次开网页的突发要等到下一 tick 才拿得到带宽。这部分不预留，
+		// 所以 Σ 份额可以暂时超过 root_cap，超出的只是这些池没用上的余量，最多持续一个 tick。
+		raise := func(members []*fairSlot, level uint64) {
+			for _, m := range members {
+				if !m.blocked && level > 0 {
+					m.alloc = max(m.alloc, min(m.ceiling, m.floor+level*m.weight))
+				}
+			}
+		}
+		raise(normal, normalLevel)
+		raise(heavy, heavyLevel)
 	}
 	return fillOutcome{
 		truncated:  normalOut.truncated || heavyOut.truncated,
@@ -472,7 +486,7 @@ func layerFloor(m *fairSlot) uint64 {
 }
 
 // waterFill 在 members 之间按 weight 分 pool（每人已有 alloc=floor、want≥floor），返回剩余。
-func waterFill(members []*fairSlot, pool uint64) (uint64, fillOutcome, bool) {
+func waterFill(members []*fairSlot, pool uint64) (uint64, fillOutcome, bool, uint64) {
 	out := fillOutcome{}
 	for round := 0; ; round++ {
 		out.rounds = round
@@ -486,12 +500,12 @@ func waterFill(members []*fairSlot, pool uint64) (uint64, fillOutcome, bool) {
 		}
 		if totalWeight == 0 {
 			out.unresolved = 0
-			return pool, out, false
+			return pool, out, false, 0
 		}
 		if round >= fairFillMaxRounds {
 			splitRemainder(members, pool, totalWeight)
 			out.truncated = true
-			return 0, out, true
+			return 0, out, true, pool / totalWeight
 		}
 		// 一轮之内所有人对着同一个 (pool, totalWeight) 判定，钉住后再一起扣。
 		progressed := false
@@ -509,7 +523,7 @@ func waterFill(members []*fairSlot, pool uint64) (uint64, fillOutcome, bool) {
 		if !progressed {
 			splitRemainder(members, pool, totalWeight)
 			out.unresolved = 0
-			return 0, out, true
+			return 0, out, true, pool / totalWeight
 		}
 	}
 }
