@@ -5,6 +5,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/xtls/xray-core/common"
 	"golang.org/x/time/rate"
 )
 
@@ -48,6 +49,30 @@ func NewPacedWriter(ctx context.Context, writer Writer, pacer Pacer) Writer {
 	}
 	return &RateLimitWriter{Writer: writer, ctx: ctx, pacer: pacer}
 }
+
+// 限速包装只管节流，关闭、打断与 XUDP 的「塞一个错误再恢复」都原样交给里面的管道：
+// mux / XUDP 会话拿到的是包装后的 link，靠这些方法收尾；少转一个，会话就关不掉
+// （XUDP 更是直接断言 *pipe.Reader，整个内核 panic）。
+func (r *RateLimitReader) Interrupt() { common.Interrupt(r.Reader) }
+
+func (r *RateLimitReader) Close() error { return common.Close(r.Reader) }
+
+// ReturnAnError 与 Recover 见 pipe.Reader。
+func (r *RateLimitReader) ReturnAnError(err error) {
+	if p, ok := r.Reader.(interface{ ReturnAnError(error) }); ok {
+		p.ReturnAnError(err)
+	}
+}
+
+func (r *RateLimitReader) Recover() {
+	if p, ok := r.Reader.(interface{ Recover() }); ok {
+		p.Recover()
+	}
+}
+
+func (w *RateLimitWriter) Interrupt() { common.Interrupt(w.Writer) }
+
+func (w *RateLimitWriter) Close() error { return common.Close(w.Writer) }
 
 func (r *RateLimitReader) wait(n int) error { return paceOrWait(r.ctx, r.pacer, r.limiters, n) }
 

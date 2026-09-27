@@ -13,7 +13,6 @@ import (
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/signal/done"
-	"github.com/xtls/xray-core/transport/pipe"
 )
 
 type SessionManager struct {
@@ -184,11 +183,14 @@ func (s *Session) Close(locked bool) error {
 		common.Close(s.output)
 	} else {
 		// Stop existing handle(), then trigger writer.Close().
-		// Note that s.output may be dispatcher.SizeStatWriter.
-		s.input.(*pipe.Reader).ReturnAnError(io.EOF)
-		runtime.Gosched()
-		// If the error set by ReturnAnError still exists, clear it.
-		s.input.(*pipe.Reader).Recover()
+		// Note that s.output may be dispatcher.SizeStatWriter, and s.input may be a
+		// rate-limit wrapper around the pipe: go through the interface, not *pipe.Reader.
+		if input, ok := s.input.(xudpInput); ok {
+			input.ReturnAnError(io.EOF)
+			runtime.Gosched()
+			// If the error set by ReturnAnError still exists, clear it.
+			input.Recover()
+		}
 		XUDPManager.Lock()
 		if s.XUDP.Status == Active {
 			s.XUDP.Expire = time.Now().Add(time.Minute)
@@ -249,4 +251,11 @@ func init() {
 			XUDPManager.Unlock()
 		}
 	}()
+}
+
+// xudpInput is what an XUDP session needs from its input: *pipe.Reader and the
+// rate-limit wrapper around it both provide it.
+type xudpInput interface {
+	ReturnAnError(error)
+	Recover()
 }
