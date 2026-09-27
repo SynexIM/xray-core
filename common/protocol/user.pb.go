@@ -53,16 +53,13 @@ type User struct {
 	// behind the peak one — traffic has to clear both, so a fresh line runs at
 	// PIR until its burst allowance drains and then settles at CIR.
 	//
-	// committed_burst_bytes = 0 means "one day of the committed rate", which is
-	// the sane default: a customer may spend their daily commitment whenever
-	// they like, at full speed, and still never exceed it over the day.
+	// committed_burst_bytes = 0 means no burst allowance: the committed bucket
+	// keeps its small default window, i.e. plain single-rate CIR.
 	// committed_bps above bandwidth_bps is meaningless and is ignored.
 	CommittedBps        uint64 `protobuf:"varint,6,opt,name=committed_bps,json=committedBps,proto3" json:"committed_bps,omitempty"`
 	CommittedBurstBytes uint64 `protobuf:"varint,7,opt,name=committed_burst_bytes,json=committedBurstBytes,proto3" json:"committed_burst_bytes,omitempty"`
-	// class 标识这个用户所属的共享争抢策略客户组（如 "live" / "shortvideo"）。
-	// 权重、normal_cap、突发信用不放在这里——它们是运营参数，走
-	// app.fairshare.command 的 SetClassPolicy 整份下发，这里只带一个名字。
-	// 空 = 未分类，落到 class 表里名字为空的那条兜底策略；没有兜底策略就是同权重、无 class 上限。
+	// class 是争抢参数组的名字（权重、地板、保底、重度识别），参数本身走
+	// app.fairshare.command 的 SetClassPolicy 整份下发。表里没有这个名字 = 不加权、无地板。
 	Class string `protobuf:"bytes,8,opt,name=class,proto3" json:"class,omitempty"`
 	// Directional limits use the legacy committed/peak/burst contract in bit/s,
 	// bit/s, and bytes respectively. If any directional field is set, upload and
@@ -77,22 +74,24 @@ type User struct {
 	// EgressTag pins this authenticated user to an outbound tag. Empty preserves
 	// normal routing.
 	EgressTag string `protobuf:"bytes,15,opt,name=egress_tag,json=egressTag,proto3" json:"egress_tag,omitempty"`
-	// Three-tier shaping. Standard is upload/download_bandwidth_bps (or
-	// bandwidth_bps when no direction is set); both directions use these values.
+	// Pool shaping (tier_shaper.go). Standard is upload/download_bandwidth_bps
+	// (or bandwidth_bps when no direction is set); both directions use these.
 	//
-	//	burst_bit_per_sec + burst_credit_bytes  short peak paid from a credit that
-	//	                                        refills while running below standard
-	//	sustained_bit_per_sec                   applied after the credit is empty and
-	//	                                        the line stays saturated for
-	//	                                        sustained_after_seconds
+	//	burst_bit_per_sec + burst_credit_bytes  peak above standard paid from a
+	//	                                        credit that refills at standard
+	//	sustained_bit_per_sec                   not a cap: the guaranteed rate of a
+	//	                                        heavy pool while the node is congested
 	//
-	// 0 disables that tier. Mechanism lives in tier_shaper.go.
-	BurstBitPerSec        uint64 `protobuf:"varint,16,opt,name=burst_bit_per_sec,json=burstBitPerSec,proto3" json:"burst_bit_per_sec,omitempty"`
-	BurstCreditBytes      uint64 `protobuf:"varint,17,opt,name=burst_credit_bytes,json=burstCreditBytes,proto3" json:"burst_credit_bytes,omitempty"`
-	SustainedBitPerSec    uint64 `protobuf:"varint,18,opt,name=sustained_bit_per_sec,json=sustainedBitPerSec,proto3" json:"sustained_bit_per_sec,omitempty"`
-	SustainedAfterSeconds uint32 `protobuf:"varint,19,opt,name=sustained_after_seconds,json=sustainedAfterSeconds,proto3" json:"sustained_after_seconds,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	// 0 disables that item.
+	BurstBitPerSec     uint64 `protobuf:"varint,16,opt,name=burst_bit_per_sec,json=burstBitPerSec,proto3" json:"burst_bit_per_sec,omitempty"`
+	BurstCreditBytes   uint64 `protobuf:"varint,17,opt,name=burst_credit_bytes,json=burstCreditBytes,proto3" json:"burst_credit_bytes,omitempty"`
+	SustainedBitPerSec uint64 `protobuf:"varint,18,opt,name=sustained_bit_per_sec,json=sustainedBitPerSec,proto3" json:"sustained_bit_per_sec,omitempty"`
+	// pool names the shaping pool. Every user object with the same pool shares
+	// one set of rates and burst credit regardless of inbound or protocol.
+	// Empty = the user's email is its pool.
+	Pool          string `protobuf:"bytes,20,opt,name=pool,proto3" json:"pool,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *User) Reset() {
@@ -251,18 +250,18 @@ func (x *User) GetSustainedBitPerSec() uint64 {
 	return 0
 }
 
-func (x *User) GetSustainedAfterSeconds() uint32 {
+func (x *User) GetPool() string {
 	if x != nil {
-		return x.SustainedAfterSeconds
+		return x.Pool
 	}
-	return 0
+	return ""
 }
 
 var File_common_protocol_user_proto protoreflect.FileDescriptor
 
 const file_common_protocol_user_proto_rawDesc = "" +
 	"\n" +
-	"\x1acommon/protocol/user.proto\x12\x14xray.common.protocol\x1a!common/serial/typed_message.proto\"\xa0\x06\n" +
+	"\x1acommon/protocol/user.proto\x12\x14xray.common.protocol\x1a!common/serial/typed_message.proto\"\x82\x06\n" +
 	"\x04User\x12\x14\n" +
 	"\x05level\x18\x01 \x01(\rR\x05level\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12:\n" +
@@ -284,8 +283,8 @@ const file_common_protocol_user_proto_rawDesc = "" +
 	"egress_tag\x18\x0f \x01(\tR\tegressTag\x12)\n" +
 	"\x11burst_bit_per_sec\x18\x10 \x01(\x04R\x0eburstBitPerSec\x12,\n" +
 	"\x12burst_credit_bytes\x18\x11 \x01(\x04R\x10burstCreditBytes\x121\n" +
-	"\x15sustained_bit_per_sec\x18\x12 \x01(\x04R\x12sustainedBitPerSec\x126\n" +
-	"\x17sustained_after_seconds\x18\x13 \x01(\rR\x15sustainedAfterSecondsB^\n" +
+	"\x15sustained_bit_per_sec\x18\x12 \x01(\x04R\x12sustainedBitPerSec\x12\x12\n" +
+	"\x04pool\x18\x14 \x01(\tR\x04poolJ\x04\b\x13\x10\x14B^\n" +
 	"\x18com.xray.common.protocolP\x01Z)github.com/xtls/xray-core/common/protocol\xaa\x02\x14Xray.Common.Protocolb\x06proto3"
 
 var (

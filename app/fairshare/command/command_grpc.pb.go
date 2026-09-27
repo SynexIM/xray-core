@@ -4,8 +4,8 @@
 // - protoc             v6.33.3
 // source: app/fairshare/command/command.proto
 
-// app.fairshare.command 是 ipipx 魔改：节点级公平限速配置的 gRPC 下发面。
-// node-agent 收到 NodeConfig（总带宽 + headroom）后调 SetNodeBandwidth 喂进程内调度器。
+// app.fairshare.command：节点级拥塞门控（common/protocol/node_fairshare.go）的下发面。
+// 所有参数由上层下发；0 一律是「没有这一项」，内核不藏默认值。
 
 package command
 
@@ -31,15 +31,11 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type FairShareServiceClient interface {
-	// SetNodeBandwidth 设置节点整形上限 root_cap（avail_bps，已含 headroom 折算）与地板、拥塞滞回。
-	// 0=关闭节点级公平。
+	// SetNodeBandwidth 设置节点整形上限 root_cap 与拥塞滞回。avail_bps = 0 关闭节点级调度。
 	SetNodeBandwidth(ctx context.Context, in *SetNodeBandwidthRequest, opts ...grpc.CallOption) (*SetNodeBandwidthResponse, error)
-	// SetClassPolicy 整份替换客户组争抢策略表。声明式：没出现在请求里的 class 即被删除。
-	// 不另造通道——class 权重、normal_cap、突发信用全走这一个 rpc（FR-079e）。
+	// SetClassPolicy 整份替换 class 表。没出现在请求里的 class 即被删除。
 	SetClassPolicy(ctx context.Context, in *SetClassPolicyRequest, opts ...grpc.CallOption) (*SetClassPolicyResponse, error)
-	// GetStatus 读调度器运行态。存在的理由是回答运维在「这台节点分配看起来不太对」
-	// 时会问的问题——尤其是注水截断，它只表现为「分配有点不公平」，
-	// 不暴露出来就没有任何线索指向它。
+	// GetStatus 读调度器运行态（含实测吞吐，供上层切分共享链路容量）。
 	GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*GetStatusResponse, error)
 }
 
@@ -85,15 +81,11 @@ func (c *fairShareServiceClient) GetStatus(ctx context.Context, in *GetStatusReq
 // All implementations must embed UnimplementedFairShareServiceServer
 // for forward compatibility.
 type FairShareServiceServer interface {
-	// SetNodeBandwidth 设置节点整形上限 root_cap（avail_bps，已含 headroom 折算）与地板、拥塞滞回。
-	// 0=关闭节点级公平。
+	// SetNodeBandwidth 设置节点整形上限 root_cap 与拥塞滞回。avail_bps = 0 关闭节点级调度。
 	SetNodeBandwidth(context.Context, *SetNodeBandwidthRequest) (*SetNodeBandwidthResponse, error)
-	// SetClassPolicy 整份替换客户组争抢策略表。声明式：没出现在请求里的 class 即被删除。
-	// 不另造通道——class 权重、normal_cap、突发信用全走这一个 rpc（FR-079e）。
+	// SetClassPolicy 整份替换 class 表。没出现在请求里的 class 即被删除。
 	SetClassPolicy(context.Context, *SetClassPolicyRequest) (*SetClassPolicyResponse, error)
-	// GetStatus 读调度器运行态。存在的理由是回答运维在「这台节点分配看起来不太对」
-	// 时会问的问题——尤其是注水截断，它只表现为「分配有点不公平」，
-	// 不暴露出来就没有任何线索指向它。
+	// GetStatus 读调度器运行态（含实测吞吐，供上层切分共享链路容量）。
 	GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error)
 	mustEmbedUnimplementedFairShareServiceServer()
 }

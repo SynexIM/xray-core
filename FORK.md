@@ -16,14 +16,12 @@ app/fairshare/              节点级公平限速 + command service
 app/accesslog/              访问日志聚合 + command service（PullAccess）
 app/reverse/command/        reverse（bridge/portal）热改的 gRPC 面
 app/dispatcher/accesshook.go
-common/buf/fairlimit.go     公平份额整形
 common/buf/limit.go         每用户带宽整形
 common/protocol/user_limits.go     每用户限速状态
 common/protocol/user_conns.go      每用户连接数
-common/protocol/node_fairshare.go  节点级自适应带宽调度器
-common/protocol/burst_credit.go    突发信用
-common/protocol/tier_shaper.go     每用户三级限速（标准/突发/持续）+ 按连接公平低时延整形
-infra/conf/user_runtime.go         各协议客户端 JSON 共用的方向/三级/egress_tag 字段
+common/protocol/tier_shaper.go     按池整形（标准/突发）+ 按连接公平低时延整形，节点上唯一的限速执行器
+common/protocol/node_fairshare.go  节点级拥塞门控：只在拥挤时按 class 注水改写各池速率
+infra/conf/user_runtime.go         各协议客户端 JSON 共用的方向/池整形/egress_tag/pool 字段
 app/proxyman/outbound/rate_limit.go  每出站共享总带宽桶
 proxy/http/users.go         给 http 协议补上客户端（email）管理
 ```
@@ -62,7 +60,7 @@ proxy/http/users.go         给 http 协议补上客户端（email）管理
 
 Nodus/IPNex 曾在删除的 vendored snapshot 中维护方向限速、固定出口和 active
 connection gauges。本 fork 将其经过测试的运行语义收敛到这份 canonical tree：不再
-保留第二份 xray 权威；原有 adaptive fair scheduler、class 与 burst-credit 仍是正交层。
+保留第二份 xray 权威。
 
 ### 为什么限速字段放在 `User` 顶层而不是各协议的 account 里
 
@@ -122,7 +120,7 @@ relay 模式的配置里根本没有 `User` 消息：每个 `RelayDestination` �
 指针缓存的，现造 = 每条连接一套满桶 = 开 N 条连接就是 N 倍速率。
 现在跟 `MultiUserInbound` 一样，构造时就把 `users[i]` 建好，全程复用。
 
-### 双速率：PIR / CIR / CBS，以及为什么 CBS 默认是一天的承诺量
+### 双速率：PIR / CIR / CBS
 
 专线卖的是「承诺速率 + 允许突发」，一个桶表达不了：按峰值卖成本兜不住，
 按承诺卖客户觉得慢。所以限速器是**一串桶**，流量依次通过每一个：
@@ -130,7 +128,7 @@ relay 模式的配置里根本没有 `User` 消息：每个 `RelayDestination` �
 ```
 bandwidth_bps          PIR  峰值速率，突发能到多快        bit/s，0 = 不限
 committed_bps          CIR  承诺速率，长期稳定给多少      bit/s，0 = 不设
-committed_burst_bytes  CBS  能以峰值速率花掉多少额度      字节，0 = 自动
+committed_burst_bytes  CBS  能以峰值速率花掉多少额度      字节，0 = 没有
 ```
 
 `committed_bps = 0` 时只有峰值桶，单速率行为**一个字节都没变**。
@@ -138,12 +136,7 @@ committed_burst_bytes  CBS  能以峰值速率花掉多少额度      字节，0
 承诺桶是满的，立刻放行，只有峰值桶在排队 → 跑 PIR；CBS 花完后承诺桶开始
 按 CIR 滴令牌 → 自然落到 CIR。不需要任何额外状态机。
 
-**CBS 留空时默认 = 一天的承诺量（`bitsToBytes(CIR) × 86400`）。**
-CBS 在这里是业务额度，不是防锯齿的窗口。承诺速率卖的是「你每天至少有这么多」，
-与之配套的突发额度自然就是「这一天的承诺量你可以随时以峰值速率花掉」——
-客户白天猛用晚上不用，或者反过来，都不吃亏，而一天之内的总量仍被 CIR 兜住。
-窗口更短会把额度切碎（客户感觉「刚快一下就掉速」），
-更长会让一次异常爆发吃掉后面好几天的额度。
+**CBS = 0 就是没有额度**：承诺桶只有默认小窗口，等于单速率 CIR。额度由控制面给，内核不替它编一个。
 
 两个容易配错的边界，处理原则是**配错的后果应该是限住，不是放开**：
 
@@ -165,197 +158,34 @@ link 层是真推字节量速率的：突发段应在 PIR 附近，CBS 烧干后
 `getLink` 的两条独立管道方向极易搞错（历史上上行漏过限速），只测一个方向
 另一个方向漏了不会有任何提示。
 
-### 节点级限速是一个自适应带宽调度器，不是均分
+### 池整形 + 拥塞门控：不挤不限到持续，挤了才按 class 分
 
-`node_fairshare.go` 原来是 `share = avail / len(active)` 纯人头均分。它有两个
-说不过去的地方：
-
-一是**只想要 0.17 Mbps 的人照样占着一整份**。480 Mbps 的节点、500 个客户，
-其中 300 个只在挂着不怎么用，剩下 200 个人也只能拿人头份额 0.96 Mbps，
-另外那 300 份基本烂在手里。
-
-二是**地板无条件生效**。原来 `share < hard` 时把每个人都抬到硬地板，不管
-`hard × 人数` 是否给得起：160,000 B/s 的节点、50 个活跃用户、16,384 的硬地板 →
-调度器发出去 819,200 B/s，是节点上限的 5.1 倍。发出的额度比水管还大，
-它就不再是瓶颈，真实排队跑到上游运营商的缓冲区里去了——那里我们既看不见也
-控制不了。这不是 bug 而是「只慢不断连」的刻意取舍，但它的代价没被写下来。
-2026-08-22 裁定改选「节点总出口守得住」。
-
-现在是 **work-conserving 加权 max-min 公平（注水法）**，对标运营商 BNG 里的
-Subscriber-aware Hierarchical QoS：
+节点上只有一个限速执行器：`tier_shaper.go` 的池整形器（一个池一对上下行）。
+节点调度器 `node_fairshare.go` 不再挂自己的桶，只在拥挤时改写池整形器的速率。
 
 ```
-每 tick 把活跃成员分两类
-  satisfied   本 tick 从未因等令牌阻塞  →  demand = 实测吞吐（他就要这么多）
-  backlogged  阻塞过                    →  还想要更多，具体多少不必猜
-分配
-  1  地板先扣掉（前提：地板×活跃人数 ≤ root_cap，给不起就不给）
-  2  satisfied 按实测吞吐（+1/8 抬头）钉住，扣掉
-  3  剩下的池子在 backlogged 里按 class weight 分
-  4  谁分到超过自己天花板就钉住、多的还池，回 3，直到无人新饱和
+            不挤（used < enter%·root_cap，或没开 root_cap）      挤
+池整形器    标准封顶；有额度跑突发                               速率 = 调度器给的份额
+额度        按放行字节扣、按标准回补（= 只扣超出标准的部分）    同左（份额 ≤ 标准，额度只会回补）
+持续速率    不起作用                                             重度池的保底
 ```
 
-**关键简化：不需要预测「他想要多少」，只需要知道「他够不够」。**
-够不够靠 `FairLimitReader`/`Writer` 的 `onBlocked` 回调测——这一 tick 内一次都
-没为等令牌而阻塞过，就是够了。不猜数值、不做 DPI、不做流量指纹。
+- **池**：`User.pool` 显式指定（控制面下发 = 实例 id）。同池的所有用户对象——多个入站、多个协议——
+  共用一份速率与额度，绝不 ×N。pool 为空时以 email 为池。
+- **拥挤时的注水**（每秒一次，work-conserving）：class 聚合保底 → 正常池地板 → 重度池保底（= 持续速率），
+  每层整层给得起才发；剩余按 weight 先注给正常池（目标到标准），再注给重度池。谁也没被压住就全部放回标准。
+- **重度池**：class 的 `heavy_window_seconds` 内平均用量 ≥ 标准 × `heavy_percent`%。窗口前的时间按零算，
+  刚跑满的人不会立刻被当成重度。任一为 0 = 不识别。
+- **时延**：25ms 量子 + 按连接 SFQ + 新连接首包不等，拥挤时也一样（份额只改速率，不改排队方式）。
+- 所有参数 0 = 没有这一项；class 表里没有的名字 = 不加权、无地板。内核里没有业务名字，也没有默认值。
 
-额度总量契约：**只要调度器进入约束态**（有成员被权重份额压住，而不是拿到自己
-想要的全部），Σ allocation ≤ root_cap，一个字节都不多发。反过来，没人被压住时
-每人发的是各自天花板，合计可以大于 root_cap——那不是超发，那是 work-conserving
-的定义，因为没人真的想要那么多。
-
-三档地板，逐档退到给得起为止：`max(class 地板, 软地板)` → 硬地板 → 不给。
-地板还被自己的天花板夹住：给一个只买了 8KB/s 的人 16KB/s 的地板毫无意义，
-他跑不掉，只会白白吃掉别人的份额。
-
-注水一轮之内所有人对着**同一个** `(pool, totalWeight)` 快照判定，钉住之后再一次性
-扣。边判边扣的话，同一轮里排在后面的成员看到的池子已经被前面的人扣小了——而活跃
-成员是从 map 里遍历出来的，顺序每 tick 都不一样，于是同一批人同样的需求，
-这一秒和下一秒能算出不同的额度。客户端表现为速率无缘无故抖，日志里什么都看不出来。
-`TestFillIsOrderIndependent` 守住这一条。
-
-注水有轮数上限（`fairFillMaxRounds = 8`）。正常两三轮就收敛；成员极多且天花板各不
-相同时最坏是 O(N) 轮，5 万成员会把 1 秒的 tick 跑穿，所以撞顶就把余下的池子按权重
-一次分完——总额仍守得住，只是那批成员之间的公平性是近似的。
-
-**这个上限故意没做成可配置的。** 想调低是为了省 CPU，但真正的成本来自成员数而不是
-轮数（5 万成员 8 轮约 40 万次比较，离 1 秒的预算差着两个数量级），调低救不了慢机器；
-想调高是为了公平精度，可正常两三轮就收敛，调高什么也买不到。与其开一个没人知道该
-填什么的旋钮，不如**把截断本身暴露出来**——真有一天它天天在截断，那时候拿着数字再
-决定，比现在猜一个数强。
-
-截断只表现为「分配有点不公平」，不暴露出来的话没有任何线索指向它，运维会去查调度器
-逻辑，查半天查不出来。日志里有、没人看，等于没有；每 tick 刷一行，也等于没有。所以：
-
-```
-日志    只在进入/退出截断时各记一行，持续期间每 5 分钟复述一次「已经持续多久」
-接口    FairShareService.GetStatus 随时能读走完整数字
-```
-
-`GetStatus` 回答运维的三个问题：**这一 tick 截断了吗**（`fill_truncated`）·
-**还剩多少成员没轮到**（`fill_unresolved_members`，配 `active_members` 当分母）·
-**持续多久了**（`fill_truncated_ticks`，另有 `fill_truncated_total_ticks` 供事后复盘）。
-`fill_rounds` 两头一眼可分：0 = 第一轮就没人被钉住、直接按权重分完（同质成员的常态），
-等于上限 = 撞顶截断。顺带报 `congested`——运维排查「分配不对」时第一个要排除的，
-就是「其实根本没进公平模式」。
-
-拥塞滞回：利用率不过上阈值**根本不削速**，每人跑自己的天花板；回落到下阈值
-并连续 N 个 tick 才退出，避免在 89%/91%/89% 之间反复抖动。阈值留空 = 不做拥塞
-判定（永远公平模式，等于改造前的行为）。
-
-**`normal_cap` 不是保证带宽，绝不能实现成 CIR。** 500 个在线客户 × 20 Mbps =
-10 Gbps，物理只有 500 Mbps，数学上不可能保证。它的语义是「机器不挤的时候你能
-一直跑到这个速度」。`node_fairshare_test.go` 里有一条测试专门守住这件事：
-10 个人挤 6 MB/s 时**人人都拿不到** `normal_cap`。
-
-**xray 只管「带宽怎么分」，管不了「排队延迟」。** xray 是在用户态对已经读进内存
-的 buffer 整形，做不了 AQM。直播在拥塞时的体验主要取决于延迟而不是带宽，
-所以节点装机还必须一并下发 `tc qdisc replace dev <wan> root cake bandwidth
-<root_cap>`，且 `root_cap` 两边同值。只做加权公平，直播在满载时照样卡。
-
-### 突发信用：只按超出基准的那部分扣，且不给测速开后门
-
-客户买的是 20 Mbps，但他偶尔开个网页、下个 300 MB 文件、跑一次测速——这些时候
-线路应该觉得很快；持续拉几十 GB 的人则应该稳定回落到基准。一个固定的桶做不到
-两头兼顾，所以有了 `burst_credit.go`：
-
-```
-桶容量   burst_credit_bytes（约 1 GB）
-扣费     只按超出 normal_cap 的那部分字节扣 —— 跑 120 Mbps、基准 20 Mbps 时
-         按 100 Mbps 的量消耗。按全量扣的话，老老实实跑基准的人也会被扣光。
-回补     跑得比 normal_cap 慢时按没用满的差额回补
-峰值     随信用线性衰减：信用满 → burst_cap，信用空 → normal_cap。
-         不做断崖回落，那在客户端表现为下载突然卡死一下。
-整形     有突发策略的成员用 25ms 窗口（普通成员 125ms）。burst_cap 常是基准的
-         5~6 倍，用 125ms 窗口会让它一次倾泻近 2MB，整形就成了摆设。
-```
-
-**明确不做：识别测速站然后偷偷解除限速。** 测速显示 120 Mbps 而实际下载永远
-20 Mbps，会让测速结果不再代表真实体验，且极易被用户反向识别——换个非常见测速站
-就露馅。通用突发信用本身就能让测速跑出高值，这是诚实的做法：他测出来的 120
-就是他这会儿真能跑到的 120。
-
-### 共享争抢策略客户组走 `SetClassPolicy`，不另造通道
-
-class 名挂在 `User.class` 上随实例下发，策略表（weight / normal_cap /
-burst_cap / burst_credit / floor_ratio）是**运营参数**，走
-`app.fairshare.command` 的 `SetClassPolicy` 整份声明式替换，不进客户界面。
-直播 weight 高于短视频；实测拥塞时两者拿到的带宽正好是 weight 比，
-且短视频不被饿死；直播空闲时短视频能吃满自己的 `normal_cap`。
-
-class 必须贯穿**全部八个协议**的配置路径。少覆盖一个的表现极其隐蔽：
-配置写了、面板显示了、保存也成功了，xray 解析时静默丢弃，这个客户在节点上落回
-同权重兜底，卖出去的直播优先级不生效而账面上是生效的。
-`infra/conf/limits_matrix_test.go` 逐协议钉住这件事。
-
-### 带宽预留是「一群人的地板」，不是「每个人的上限」
-
-`ClassPolicy` 上的 `upload_reserved_byte_per_sec` / `download_reserved_byte_per_sec`
-是这个 class **全部活跃成员合起来**的保底，不是给每人发一份配额。
-两条推论必须同时成立，少一条这个特性就变成超卖：
-
-- **没用完立刻还给节点池**。预留 200M 的客户当前只跑 30M，另外 170M 当场可被别人
-  抢走，不空占。预留买的是「拥塞时至少拿得到」，不是「独占一条管子」。
-- **超出部分照样去抢**。成员总需求超过预留额时，多出来的那部分回到普通竞争，
-  不因为「买了预留」就获得无限优先级。
-
-成员用 `member_ids`（稳定的 Client UID）声明，运行时按 `User.email` 索引 ——
-**这是唯一能让加减成员对已建立连接立即生效的键**。限速桶因此不能在建链时写死：
-`common/buf/limit.go` 的 `NewAdaptiveRateLimit{Reader,Writer}WithLimiter` 给普通
-每用户桶挂了一个 `bypass func() bool`，桶还在，只是可以被动态旁路。
-
-不这么做的话失败是这样的：运营在面板上把客户加进预留组，接口返回成功，
-面板显示已生效，**但这个客户当前所有连接仍然走旧的每用户桶**，要等他重连才生效。
-长连接场景（专线的主要形态）可能几小时都不重连 —— 客户投诉「买了预留没速度」，
-而后台每一处都显示正常。`common/protocol/node_fairshare_reservation_test.go`
-钉住的就是这条。
-
-### 三级限速：标准 / 突发 / 持续，且不能有队头阻塞
-
-专线档位 = 三组数（约定 §1）。字段在 `protocol.User` 16–19：`burst_bit_per_sec`、
-`burst_credit_bytes`、`sustained_bit_per_sec`、`sustained_after_seconds`；标准速率沿用
-`upload_bandwidth_bps` / `download_bandwidth_bps`（未设方向时用 `bandwidth_bps`），上下行
-各一个整形器、参数对称。任一三级字段出现，或只配了方向标准速率（没配旧的 peak/burst），
-就走 `tier_shaper.go`；旧 PIR/CIR/CBS 与方向峰值配置一个字节没变。
-
-```
-突发   信用满时跑 burst；只按超出标准的字节扣，低于标准时按差额回补；新用户起步满信用
-持续   信用耗尽后仍连续积压满 sustained_after 秒 → 降到 sustained；积压消失满 1s 恢复
-       持续档期间信用冻结，不在两档之间来回跳
-改档   按 email 共享整形器：同一逻辑客户挂在多个入站上共用一套额度；AddUser/UpdateUser
-       命令成功后 ApplyTierPolicy 原地换参数，已建连接不重建、不断
-```
-
-为什么不用 `rate.Limiter.WaitN`：它的预约是全局 FIFO，一条连接预约走 125ms 令牌后，
-同用户另一条连接的一个小包也排在后面——线上 IPIPX 直播卡、起步慢就是这个。现在是
-**桶深一个 25ms 量子 + 按连接的起始时间公平排队（SFQ）**：大请求切成半量子，满载连接
-按字节轮转；空闲后回来的连接（含新连接）起始标签等于当前虚拟时间，允许带不超过一个
-量子的欠账立即放行；没有全局锁 sleep，等待走各自 channel，由一个 AfterFunc 按令牌到期
-派发。降档时把上一档欠账截到新档一个量子，守住时延上界。UDP/QUIC 流同样是一个 flow，
-稀疏就优先，不会排在 TCP 大块后面。
-
-实测（`common/protocol/tier_shaper_test.go`，真实时钟、`-race`，4 条满载连接 + 1 条
-每 50ms 发 200B 的稀疏连接；标准 4 MB/s、突发 16 MB/s、信用 12 MB、持续 2 MB/s、2s）：
-
-| 项 | 结果 |
-|---|---|
-| 突发 / 标准 / 持续 / 热改档后速率误差 | −0.1% / +0.1% / −0.8% / +0.1% |
-| 满载时新连接首字节时延 | ≤ 20µs |
-| 满载时稀疏连接 RTT 增量 | ≤ 0.1ms（上界一个量子 25ms） |
-| 同用户 4 条连接份额 max/min | 1.05 |
-
-不限速→限速：带固定出口（`egress_tag`）的受管用户即使当前不限速，也挂一个零策略（直通）的
-整形器并放弃 splice，改档时 `ApplyTierPolicy` 原地换策略，已建连接立即受限
-（`TestTierShaperUnlimitedToLimitedOnLiveFlow`）。代价是这类用户不走零拷贝。没有 `egress_tag`
-的普通用户保持原状：不限速时走 splice，改成限速只对新连接生效。
-mixed/socks/http 的启动配置现在也能带 `email` 与上述字段（`UserAccount.runtime`），
-这样 Mixed 账号名与逻辑客户 email 不同时，重启后仍与其他入站共享额度与统计。
+测试：`common/protocol/pool_shaping_test.go`（不挤时突发→标准且永不降持续、pool 显式共享、拥挤时权重/地板/重度）。
 
 ### ⚠️ 单位陷阱：同一个 `_bps` 后缀，两处含义差 8 倍
 
 ```
 common/protocol/user.proto        bandwidth_bps / committed_bps   比特/秒
-app/fairshare/command/*.proto     avail_bps / *_floor_bps         字节/秒
+app/fairshare/command/*.proto     avail_bps / *_byte_per_sec       字节/秒
 app/proxyman/config.proto         rate_limit_bit_per_sec           比特/秒
 app/proxyman/command/command.proto rate_limit_bit_per_sec          比特/秒
 ```
@@ -364,27 +194,23 @@ app/proxyman/command/command.proto rate_limit_bit_per_sec          比特/秒
 `user_limits.go` 的 `bitsPerSecondToRuntimeBytesPerSecond`。
 
 这两组历史字段**不改名**（改名会断掉已经在跑的 node-agent），改为在两份 proto
-里各自写死语义，并由 `common/protocol/node_fairshare_units_test.go` 与
-`app/fairshare/command/command_units_test.go` 两组断言测试钉住那个 8 倍差。
+里各自写死语义，并由 `app/fairshare/command/command_units_test.go` 钉住。
 谁要是「顺手统一成同一单位」，那两组测试会红——而线上的症状会是
 「节点被掐到 1/8 速度」，从现象倒查回来要几天。
 
 **新增的速率字段一律带 `_bit_per_sec` / `_byte_per_sec` 后缀，不许再用裸 `_bps`。**
 
-### 不许有默认带宽
+### 不许有默认值
 
 ```
-每客户端 bandwidth_bps / committed_bps   0 → 不套桶
-节点 avail_bps                           0 → 整个节点公平关闭
-软地板 soft_floor_bps                    0 → 无软地板
-硬地板 hard_floor_bps                    0 → 无硬地板
-class 不配                               → 同权重、无 class 上限、无突发
+每客户端 bandwidth_bps / committed_bps / 标准   0 → 不套桶
+committed_burst_bytes                            0 → 没有额度
+节点 avail_bps                                   0 → 节点级调度关闭
+class 不配 / floor / reserved / heavy_*          0 → 没有这一项
 ```
 
-后两条是这次改的：原来 0 会被悄悄换成 `500_000/8` 和 `16*1024` 两个魔数，
-运营看不出来自己其实开了地板。**0 就是「无地板」，不是「用默认值」。**
-代价要在面板上写明：开了节点公平又不设硬地板，极端拥挤时用户可能被压到接近 0
-而不只是变慢——这必须是运营明知的选择，不能由代码替他默默决定。
+0 就是「没有」，不是「用默认值」。开了节点调度又不配地板，极端拥挤时池可能被压到接近 0——
+这必须是控制面明知的选择，不能由内核替它默默决定。
 
 ### 5 万实例下的客户换手：批量入口与 email 索引
 
@@ -450,20 +276,6 @@ Linux 的 splice 在两个 socket 之间零拷贝直通，会绕过 dispatcher �
 
 所以公平开启 = 全节点 buffered copy。代价是失去 splice 的极限吞吐。
 这是产品决策：**公平 > 极限吞吐**。公平没启用时 splice 照旧。
-
-### 公平调度里「这个用户的天花板」怎么算
-
-`fairOwnLimitBytesPerSecond` 返回的 0 在所有调用点（`Member` 建桶与 `ceilingFor`）
-都是「这个用户没有自己的上限」的意思。所以它必须返回**实际天花板**：
-`bandwidth_bps` 非 0 就用它，否则退到 `committed_bps`，两个都是 0 才返回 0。
-
-只读 `bandwidth_bps` 会让「只买了承诺速率」的客户（PIR=0、CIR>0，语义上就是单速率
-CIR）在公平分配里被当成无天花板：拥挤时他分到一份自己根本跑不满的份额
-（per-user 承诺桶还压着他），这部分节点容量就空转了。这跟
-「PIR = 0 且设了 CIR = 单速率 CIR」的双速率语义是同一件事。
-
-双速率用户的天花板是 **PIR**，不是 CIR——CIR 只在 CBS 花完后拉低长期均值，
-不是他能跑到的最快速度。
 
 ## 依赖替换：REALITY（v26.9.9 起已删除）
 

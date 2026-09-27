@@ -6,16 +6,6 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// committedBurstWindowSeconds 是 CBS 缺省值的窗口：一天。
-//
-// 为什么是一天而不是「一分钟」「一小时」这类整形常见值：CBS 在这里是**业务额度**，
-// 不是防锯齿的窗口。承诺速率卖的是「你每天至少有这么多」，那么与之配套的突发额度
-// 自然就是「这一天的承诺量你可以随时以峰值速率花掉」——客户白天猛用、晚上不用，
-// 或者反过来，都不吃亏；但一天之内的总量仍然被 CIR 兜住。
-// 换成更短的窗口会把额度切碎（客户感觉「刚快了一下就掉速」），
-// 换成更长的窗口会让一次异常爆发吃掉后面好几天的额度。
-const committedBurstWindowSeconds = 86400
-
 type runtimeLimiterState struct {
 	mu sync.Mutex
 	// Symmetric state preserves the existing PIR/CIR/CBS implementation.
@@ -79,6 +69,7 @@ func (u *MemoryUser) HasRuntimeLimits() bool {
 //	                          CBS 花完后自然落到 CIR。
 //	CIR >= PIR（PIR > 0）    → 串一个不比峰值更紧的桶毫无意义，只会平白多一次
 //	                          WaitN，所以忽略 CIR，退化成单速率。
+//	CBS = 0                 → 承诺桶没有额度（默认 1/8 秒窗口），等于单速率 CIR。
 //	PIR = 0 且 CIR > 0      → 只有承诺桶，按**单速率 CIR** 处理（默认 1/8 秒窗口，
 //	                          CBS 忽略）。理由：CBS 的定义是「能以峰值速率花掉多少」，
 //	                          没有峰值速率时它无处可花；若照搬 CBS 当 burst，
@@ -219,17 +210,9 @@ func buildRuntimeLimiters(u *MemoryUser, newLimiter func(bytesPerSecond, burstBy
 		return []*rate.Limiter{peakLimiter}, peakBurst
 	}
 
+	// CBS = 0 就是没有额度：承诺桶只有默认的小窗口，等于单速率 CIR。
+	// 这里不替控制面编一个「一天的承诺量」之类的默认额度。
 	burstBytes := u.CommittedBurstBytes
-	if burstBytes == 0 {
-		// 乘法溢出会绕回一个很小的数 = 桶突然变浅 = 客户莫名其妙掉速，
-		// 比截断难查得多。所以先挡住（buf.clampBurst 再把它收进 int）。
-		const maxCommittedForDefaultBurst = ^uint64(0) / committedBurstWindowSeconds
-		if committed > maxCommittedForDefaultBurst {
-			burstBytes = ^uint64(0)
-		} else {
-			burstBytes = committed * committedBurstWindowSeconds
-		}
-	}
 	committedLimiter, _ := newLimiter(committed, burstBytes)
 	return []*rate.Limiter{peakLimiter, committedLimiter}, peakBurst
 }

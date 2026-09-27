@@ -8,51 +8,54 @@ import (
 	"time"
 )
 
-// 三级限速：标准 / 突发（信用）/ 持续，按用户（email）每方向一个整形器。
+// 按池整形：一个池一对上下行整形器，节点上所有限速都由它执行。
+//
+// 池由控制面显式指定（MemoryUser.Pool）。同池的用户对象——不管挂在几个入站、几种协议上——
+// 共用同一份速率与突发额度；Pool 为空时以 email 为池，再没有 email 就按对象各自成池。
+//
+// 速率只有两种来源，谁决定取决于节点调度器（node_fairshare.go）有没有判定拥塞：
+//
+//	不拥挤   标准封顶；有突发额度时跑突发。额度按放行字节扣、按标准速率回补，
+//	         相抵正好是「只扣超出标准的部分」。不拥挤时永远不降速。
+//	拥挤     速率 = 调度器本 tick 注给这个池的份额；本 tick 不活跃（没份额）的池封在标准，
+//	         不许突发。
 //
 // 为什么不用 rate.Limiter.WaitN：它的预约是全局 FIFO，一条连接预约走 125ms 的令牌后，
-// 同用户另一条连接的一个小包也得排在后面——这就是线上直播卡、起步慢的队头阻塞。
-// 这里改成「令牌桶深度 = 一个 25ms 量子 + 按连接的起始时间公平排队（SFQ）」：
+// 同池另一条连接的一个小包也得排在后面——这就是直播卡、起步慢的队头阻塞。这里是
+// 「令牌桶深度 = 一个 25ms 量子 + 按连接的起始时间公平排队（SFQ）」：
 //
 //	量子      桶深 = 当前速率 × 25ms，单次放行半个量子，欠账不超过一个量子
 //	公平      每条连接一个 flow，按虚拟起始标签出队；满载连接之间按字节轮转
 //	稀疏优先  空闲后回来的连接（含新连接）起始标签 = 当前虚拟时间，可带一个量子的
 //	          欠账立即放行——首包不等待，空闲连接 RTT 增量 ≤ 一个量子
 //	无全局锁  锁只保护记账，等待走各自的 channel，由一个 AfterFunc 定时器按令牌到期派发
-//
-// 突发信用只按超出标准的字节扣、低于标准时按差额回补；信用耗尽后仍持续积压满
-// sustained_after 秒则降到持续速率，积压消失满 tierRecoverWindow 后恢复。
 const (
 	tierQuantum        = 25 * time.Millisecond
-	tierRecoverWindow  = time.Second
 	tierMinQuantumByte = 3000
 	tierMaxIdleTTL     = time.Hour
 )
 
-// TierPolicy 是一个方向的三级限速参数，速率单位字节/秒。Standard = 0 表示不限。
+// TierPolicy 是一个方向的限速参数，速率单位字节/秒。0 = 该项没有。
+//
+// Sustained 不参与不拥挤时的整形：它是拥挤时给重度用户的保底（见 node_fairshare.go）。
 type TierPolicy struct {
-	Standard       uint64
-	Burst          uint64
-	BurstCredit    uint64
-	Sustained      uint64
-	SustainedAfter time.Duration
+	Standard    uint64
+	Burst       uint64
+	BurstCredit uint64
+	Sustained   uint64
 }
 
 func (p TierPolicy) burstOn() bool {
 	return p.Standard > 0 && p.Burst > p.Standard && p.BurstCredit > 0
 }
 
-func (p TierPolicy) sustainedOn() bool {
-	return p.Standard > 0 && p.Sustained > 0 && p.Sustained < p.Standard
-}
-
-// UsesTierShaping 报告这个用户是否走三级限速整形器。方向标准速率（未配旧的峰值/桶深）
-// 或任一三级字段出现即启用；旧 PIR/CIR/CBS 与方向峰值配置保持原路径不变。
+// UsesTierShaping 报告这个用户是否有池整形参数。方向标准速率（未配旧的峰值/桶深）
+// 或任一突发/持续字段出现即启用；旧 PIR/CIR/CBS 与方向峰值配置走 user_limits.go 原路径。
 func (u *MemoryUser) UsesTierShaping() bool {
 	if u == nil {
 		return false
 	}
-	if u.BurstBitPerSec != 0 || u.BurstCreditBytes != 0 || u.SustainedBitPerSec != 0 || u.SustainedAfterSeconds != 0 {
+	if u.BurstBitPerSec != 0 || u.BurstCreditBytes != 0 || u.SustainedBitPerSec != 0 {
 		return true
 	}
 	legacyPeak := u.UploadPeakBps != 0 || u.UploadBurstBytes != 0 || u.DownloadPeakBps != 0 || u.DownloadBurstBytes != 0
@@ -70,20 +73,22 @@ func (u *MemoryUser) TierPolicies() (up, down TierPolicy) {
 			return TierPolicy{}
 		}
 		return TierPolicy{
-			Standard:       bitsPerSecondToRuntimeBytesPerSecond(std),
-			Burst:          bitsPerSecondToRuntimeBytesPerSecond(u.BurstBitPerSec),
-			BurstCredit:    u.BurstCreditBytes,
-			Sustained:      bitsPerSecondToRuntimeBytesPerSecond(u.SustainedBitPerSec),
-			SustainedAfter: time.Duration(u.SustainedAfterSeconds) * time.Second,
+			Standard:    bitsPerSecondToRuntimeBytesPerSecond(std),
+			Burst:       bitsPerSecondToRuntimeBytesPerSecond(u.BurstBitPerSec),
+			BurstCredit: u.BurstCreditBytes,
+			Sustained:   bitsPerSecondToRuntimeBytesPerSecond(u.SustainedBitPerSec),
 		}
 	}
 	return build(upStd), build(downStd)
 }
 
+// tierEntry 是一个池。up/down 是执行器；fair 只归调度器 goroutine 读写。
 type tierEntry struct {
 	up, down *TierShaper
 	refs     int
 	gen      uint64
+	class    string // tierRegistry 锁保护
+	fair     poolFairState
 }
 
 var tierRegistry = struct {
@@ -91,31 +96,33 @@ var tierRegistry = struct {
 	m map[string]*tierEntry
 }{m: map[string]*tierEntry{}}
 
-// 同一个逻辑客户挂在多个入站上时 email 相同，共享一套整形器；无 email 的用户按指针隔离。
-func tierKey(u *MemoryUser) string {
-	if u.Email != "" {
-		return u.Email
+// poolKey 是池的身份。显式 pool 优先；前缀让三种来源不会互相撞名。
+func poolKey(u *MemoryUser) string {
+	switch {
+	case u.Pool != "":
+		return "pool:" + u.Pool
+	case u.Email != "":
+		return "email:" + u.Email
+	default:
+		return fmt.Sprintf("user:%p", u)
 	}
-	return fmt.Sprintf("%p", u)
 }
 
-// HasTierSeam 报告连接是否要挂三级整形器。固定出口（egress_tag）的受管用户即使当前
-// 不限速也挂一个直通的整形器并放弃 splice，这样「不限速→限速」对已建连接也能热生效。
+// HasTierSeam 报告连接是否要挂池整形器。有限速参数、固定出口（egress_tag）、显式池，
+// 或节点调度器开着时都挂——没有参数的整形器是直通的，但「不限速→限速」和拥挤时的份额
+// 能对已建连接热生效。
 func (u *MemoryUser) HasTierSeam() bool {
-	return u != nil && (u.UsesTierShaping() || u.EgressTag != "")
+	return u != nil && (u.UsesTierShaping() || u.EgressTag != "" || u.Pool != "" || nodeFairScheduler.Enabled())
 }
 
-// AcquireTierShapers 为一条新连接取该用户的上下行整形器，并以这个用户的当前字段刷新
-// 策略（零策略 = 直通）。release 必须在连接结束时调用；不挂整形器时 release 为 nil。
+// AcquireTierShapers 为一条新连接取该用户所在池的上下行整形器，并以这个用户的当前字段
+// 刷新策略（零策略 = 直通）。release 必须在连接结束时调用；不挂整形器时 release 为 nil。
 func (u *MemoryUser) AcquireTierShapers() (up, down *TierShaper, release func()) {
 	if !u.HasTierSeam() {
 		return nil, nil, nil
 	}
-	var upPolicy, downPolicy TierPolicy
-	if u.UsesTierShaping() {
-		upPolicy, downPolicy = u.TierPolicies()
-	}
-	key := tierKey(u)
+	upPolicy, downPolicy := u.TierPolicies()
+	key := poolKey(u)
 	tierRegistry.Lock()
 	e := tierRegistry.m[key]
 	if e == nil {
@@ -124,9 +131,11 @@ func (u *MemoryUser) AcquireTierShapers() (up, down *TierShaper, release func())
 	}
 	e.refs++
 	e.gen++
+	e.class = u.Class
 	tierRegistry.Unlock()
 	e.up.Configure(upPolicy)
 	e.down.Configure(downPolicy)
+	nodeFairScheduler.ensureStarted()
 
 	var once sync.Once
 	release = func() { once.Do(func() { releaseTierEntry(key, e) }) }
@@ -134,26 +143,27 @@ func (u *MemoryUser) AcquireTierShapers() (up, down *TierShaper, release func())
 }
 
 // ApplyTierPolicy 把热更后的限速字段推给已建立连接正在用的整形器（改档不断连）。
-// 该用户当前没有连接时什么都不做——下一条连接建立时会按新字段取整形器。
+// 该池当前没有连接时什么都不做——下一条连接建立时会按新字段取整形器。
 func ApplyTierPolicy(u *MemoryUser) {
 	if u == nil {
 		return
 	}
 	tierRegistry.Lock()
-	e := tierRegistry.m[tierKey(u)]
+	e := tierRegistry.m[poolKey(u)]
+	if e != nil {
+		e.class = u.Class
+	}
 	tierRegistry.Unlock()
 	if e == nil {
 		return
 	}
-	var upPolicy, downPolicy TierPolicy
-	if u.UsesTierShaping() {
-		upPolicy, downPolicy = u.TierPolicies()
-	}
+	upPolicy, downPolicy := u.TierPolicies()
 	e.up.Configure(upPolicy)
 	e.down.Configure(downPolicy)
 }
 
-// 最后一条连接断开后保留状态到信用回满为止：否则断开重连就能白拿一整桶突发。
+// 最后一条连接断开后保留池到额度回满、且重度窗口过完为止：否则断开重连就能白拿一整桶
+// 突发，或者洗掉自己的重度记录。
 func releaseTierEntry(key string, e *tierEntry) {
 	tierRegistry.Lock()
 	e.refs--
@@ -161,9 +171,10 @@ func releaseTierEntry(key string, e *tierEntry) {
 		tierRegistry.Unlock()
 		return
 	}
-	gen := e.gen
+	gen, class := e.gen, e.class
 	tierRegistry.Unlock()
-	time.AfterFunc(max(e.up.idleTTL(), e.down.idleTTL()), func() {
+	ttl := max(e.up.idleTTL(), e.down.idleTTL(), nodeFairScheduler.heavyWindow(class))
+	time.AfterFunc(min(ttl, tierMaxIdleTTL), func() {
 		tierRegistry.Lock()
 		defer tierRegistry.Unlock()
 		if tierRegistry.m[key] == e && e.refs == 0 && e.gen == gen {
@@ -172,35 +183,39 @@ func releaseTierEntry(key string, e *tierEntry) {
 	})
 }
 
-// TierShaper 是一个用户一个方向的整形器。
+// TierShaper 是一个池一个方向的整形器。
 type TierShaper struct {
-	mu        sync.Mutex
-	p         TierPolicy
-	rate      float64 // 当前档速率 byte/s；0 = 不限
-	tokens    float64 // 可为负：稀疏连接立即放行留下的欠账，最多一个量子
-	credit    float64
-	last      time.Time
-	vtime     uint64
-	seq       uint64
-	queue     tierQueue
-	timer     *time.Timer
-	armed     bool
-	satSince  time.Time
-	lastBusy  time.Time
-	sustained bool
+	mu     sync.Mutex
+	p      TierPolicy
+	rate   float64 // 当前速率 byte/s；0 = 不限
+	tokens float64 // 可为负：稀疏连接立即放行留下的欠账，最多一个量子
+	credit float64
+	last   time.Time
+	vtime  uint64
+	seq    uint64
+	queue  tierQueue
+	timer  *time.Timer
+	armed  bool
+
+	// 调度器写：拥挤时的份额（byte/s）。congested=false 时 share 不起作用。
+	congested bool
+	share     float64
+
+	// 调度器读：累计放行字节、累计排过队的次数（有排队 = 还想要更多）。
+	granted uint64
+	waits   uint64
 }
 
 func newTierShaper() *TierShaper {
 	return &TierShaper{last: time.Now()}
 }
 
-// Configure 换策略不换对象：已排队的连接按新速率继续派发。信用只截断不补发，
-// 只有从「无突发」切到「有突发」时发一整桶。
+// Configure 换策略不换对象：已排队的连接按新速率继续派发。额度只截断不补发，
+// 只有从「无突发」切到「有突发」时发一整桶——新池起步即可用突发。
 func (s *TierShaper) Configure(p TierPolicy) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := time.Now()
-	s.advance(now)
+	s.advance(time.Now())
 	old := s.p
 	s.p = p
 	switch {
@@ -211,99 +226,100 @@ func (s *TierShaper) Configure(p TierPolicy) {
 	default:
 		s.credit = min(s.credit, float64(p.BurstCredit))
 	}
-	if old.Standard == 0 {
-		s.tokens = s.quantumBytesAt(s.rateFor(now))
-	}
-	s.updateTier(now)
-	s.tokens = min(s.tokens, s.quantumBytes())
+	s.updateRate()
 	s.dispatchLocked()
 }
 
-// Snapshot 返回当前档速率（byte/s）与剩余信用，供诊断与测试。
-func (s *TierShaper) Snapshot() (rate float64, credit float64, sustained bool) {
+// setShare 由调度器每 tick 调用。congested=false：回到标准/突发；congested=true：
+// share>0 时按份额，share=0 时封在标准。
+func (s *TierShaper) setShare(congested bool, share uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.advance(time.Now())
-	return s.rate, s.credit, s.sustained
+	s.congested, s.share = congested, float64(share)
+	s.updateRate()
+	s.dispatchLocked()
+}
+
+// sample 给调度器：累计放行字节、累计排队次数、当前策略。
+func (s *TierShaper) sample() (granted, waits uint64, p TierPolicy) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.granted, s.waits, s.p
+}
+
+// Snapshot 返回当前速率（byte/s）与剩余额度，供诊断与测试。
+func (s *TierShaper) Snapshot() (rate float64, credit float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.advance(time.Now())
+	return s.rate, s.credit
 }
 
 func (s *TierShaper) idleTTL() time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ttl := tierRecoverWindow
-	if s.p.burstOn() {
-		ttl = max(ttl, time.Duration(float64(s.p.BurstCredit)/float64(s.p.Standard)*float64(time.Second)))
+	if !s.p.burstOn() {
+		return time.Second
 	}
-	return min(ttl, tierMaxIdleTTL)
+	return time.Duration(float64(s.p.BurstCredit) / float64(s.p.Standard) * float64(time.Second))
 }
 
-func (s *TierShaper) quantumBytesAt(rate float64) float64 {
+func quantumBytesAt(rate float64) float64 {
 	return max(rate*tierQuantum.Seconds(), tierMinQuantumByte)
 }
 
-func (s *TierShaper) quantumBytes() float64 { return s.quantumBytesAt(s.rate) }
+func (s *TierShaper) quantumBytes() float64 { return quantumBytesAt(s.rate) }
 
-// advance 按上次结算以来的时间回填令牌与信用。信用按标准速率回补，放行时按全量扣，
-// 两者相抵正好是「只扣超出标准的部分」。持续档期间信用冻结，避免在两档之间来回跳。
+// advance 按上次结算以来的时间回填令牌与额度，并按当下的额度重选速率。
 func (s *TierShaper) advance(now time.Time) {
 	dt := now.Sub(s.last).Seconds()
 	if dt <= 0 {
 		return
 	}
 	s.last = now
-	if s.p.burstOn() && !s.sustained {
+	if s.p.burstOn() {
 		s.credit = min(float64(s.p.BurstCredit), s.credit+float64(s.p.Standard)*dt)
 	}
 	if s.rate > 0 {
 		s.tokens = min(s.quantumBytes(), s.tokens+s.rate*dt)
 	}
-	s.updateTier(now)
+	s.updateRate()
 }
 
-func (s *TierShaper) rateFor(now time.Time) float64 {
+func (s *TierShaper) rateFor() float64 {
 	switch {
-	case s.p.Standard == 0:
-		return 0
-	case s.sustained:
-		return float64(s.p.Sustained)
-	case s.inBurst():
-		return float64(s.p.Burst)
-	default:
+	case s.congested && s.share > 0:
+		return s.share
+	case s.congested || !s.inBurst():
 		return float64(s.p.Standard)
+	default:
+		return float64(s.p.Burst)
 	}
 }
 
 func (s *TierShaper) inBurst() bool {
-	return s.p.burstOn() && !s.sustained && s.credit >= float64(s.p.Burst)*tierQuantum.Seconds()
+	return s.p.burstOn() && s.credit >= float64(s.p.Burst)*tierQuantum.Seconds()
 }
 
-func (s *TierShaper) updateTier(now time.Time) {
-	// 信用在阈值附近抖动造成的瞬时突发不算「负载降下来」，只有积压消失满恢复窗口才清零。
-	if s.queue.Len() > 0 {
-		s.lastBusy = now
-		if s.satSince.IsZero() && !s.inBurst() {
-			s.satSince = now
-		}
+func (s *TierShaper) updateRate() {
+	rate := s.rateFor()
+	if rate == s.rate {
+		return
 	}
-	if now.Sub(s.lastBusy) >= tierRecoverWindow {
-		s.satSince, s.sustained = time.Time{}, false
+	if s.rate == 0 {
+		// 从不限切到限速：发一个量子，已建连接不必先还欠账。
+		s.tokens = quantumBytesAt(rate)
 	}
-	if s.p.sustainedOn() && !s.satSince.IsZero() && now.Sub(s.satSince) >= s.p.SustainedAfter {
-		s.sustained = true
-	}
-	if !s.p.sustainedOn() {
-		s.sustained = false
-	}
-	if rate := s.rateFor(now); rate != s.rate {
-		// 降档时上一档的欠账按新速率还会超过一个量子，截到一个量子以守住时延上界。
-		s.rate = rate
-		s.tokens = max(s.tokens, -s.quantumBytes())
-	}
+	s.rate = rate
+	// 降速时上一档的欠账按新速率会超过一个量子，截到一个量子以守住时延上界。
+	s.tokens = min(max(s.tokens, -s.quantumBytes()), s.quantumBytes())
 }
 
 func (s *TierShaper) grantLocked(start uint64, n int) {
 	s.tokens -= float64(n)
-	if s.p.burstOn() && !s.sustained {
+	s.granted += uint64(n)
+	if s.p.burstOn() {
 		s.credit = max(0, s.credit-float64(n))
 	}
 	s.vtime = max(s.vtime, start)
@@ -356,9 +372,10 @@ func (f *TierFlow) Wait(ctx context.Context, n int) error {
 	s := f.s
 	for n > 0 {
 		s.mu.Lock()
-		now := time.Now()
-		s.advance(now)
+		s.advance(time.Now())
 		if s.rate == 0 {
+			// 不限速也记账：调度器要靠它判断节点忙不忙。
+			s.granted += uint64(n)
 			s.mu.Unlock()
 			return nil
 		}
@@ -375,9 +392,9 @@ func (f *TierFlow) Wait(ctx context.Context, n int) error {
 			continue
 		}
 		s.seq++
+		s.waits++
 		w := &tierWaiter{start: start, seq: s.seq, n: chunk, ready: make(chan struct{})}
 		heap.Push(&s.queue, w)
-		s.updateTier(now)
 		s.dispatchLocked()
 		s.mu.Unlock()
 		select {

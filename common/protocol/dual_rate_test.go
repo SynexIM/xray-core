@@ -152,23 +152,6 @@ func TestSingleRateUnchanged(t *testing.T) {
 	}
 }
 
-// CBS 留空时默认一天的承诺量。这是商业默认值，改了它等于改了所有只填 CIR 的客户的套餐。
-func TestCommittedBurstDefaultsToOneDay(t *testing.T) {
-	user := &MemoryUser{
-		Email:        "default-cbs@example.test",
-		BandwidthBps: 80 * mbps,
-		CommittedBps: 8 * mbps, // 1 MB/s
-	}
-	limiters, _ := user.RuntimeRateLimiters(buf.NewRateLimiterWithBurst)
-	if len(limiters) != 2 {
-		t.Fatalf("PIR>CIR>0 时应有两个桶，实际 %d 个", len(limiters))
-	}
-	wantBurst := int64(mbyte) * 86400
-	if got := int64(limiters[1].Burst()); got != wantBurst {
-		t.Errorf("CBS 默认值 = %d 字节，期望一天的承诺量 %d 字节", got, wantBurst)
-	}
-}
-
 // CIR 不比 PIR 松就没有意义：串上去只会平白多一次 WaitN。
 func TestCommittedAtOrAbovePeakIsIgnored(t *testing.T) {
 	for _, cir := range []uint64{80 * mbps, 160 * mbps} {

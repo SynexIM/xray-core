@@ -37,24 +37,24 @@ func (u *User) ToMemoryUser() (*MemoryUser, error) {
 // account; mixed/socks boot accounts keep credentials outside protocol.User.
 func (u *User) RuntimeMemoryUser() *MemoryUser {
 	return &MemoryUser{
-		Email:                 u.Email,
-		Level:                 u.Level,
-		BandwidthBps:          u.BandwidthBps,
-		ConnLimit:             u.ConnLimit,
-		CommittedBps:          u.CommittedBps,
-		CommittedBurstBytes:   u.CommittedBurstBytes,
-		Class:                 u.Class,
-		UploadBandwidthBps:    u.UploadBandwidthBps,
-		UploadPeakBps:         u.UploadPeakBps,
-		UploadBurstBytes:      u.UploadBurstBytes,
-		DownloadBandwidthBps:  u.DownloadBandwidthBps,
-		DownloadPeakBps:       u.DownloadPeakBps,
-		DownloadBurstBytes:    u.DownloadBurstBytes,
-		EgressTag:             u.EgressTag,
-		BurstBitPerSec:        u.BurstBitPerSec,
-		BurstCreditBytes:      u.BurstCreditBytes,
-		SustainedBitPerSec:    u.SustainedBitPerSec,
-		SustainedAfterSeconds: u.SustainedAfterSeconds,
+		Email:                u.Email,
+		Level:                u.Level,
+		BandwidthBps:         u.BandwidthBps,
+		ConnLimit:            u.ConnLimit,
+		CommittedBps:         u.CommittedBps,
+		CommittedBurstBytes:  u.CommittedBurstBytes,
+		Class:                u.Class,
+		UploadBandwidthBps:   u.UploadBandwidthBps,
+		UploadPeakBps:        u.UploadPeakBps,
+		UploadBurstBytes:     u.UploadBurstBytes,
+		DownloadBandwidthBps: u.DownloadBandwidthBps,
+		DownloadPeakBps:      u.DownloadPeakBps,
+		DownloadBurstBytes:   u.DownloadBurstBytes,
+		EgressTag:            u.EgressTag,
+		BurstBitPerSec:       u.BurstBitPerSec,
+		BurstCreditBytes:     u.BurstCreditBytes,
+		SustainedBitPerSec:   u.SustainedBitPerSec,
+		Pool:                 u.Pool,
 	}
 }
 
@@ -63,24 +63,24 @@ func ToProtoUser(mu *MemoryUser) *User {
 		return nil
 	}
 	u := &User{
-		Email:                 mu.Email,
-		Level:                 mu.Level,
-		BandwidthBps:          mu.BandwidthBps,
-		ConnLimit:             mu.ConnLimit,
-		CommittedBps:          mu.CommittedBps,
-		CommittedBurstBytes:   mu.CommittedBurstBytes,
-		Class:                 mu.Class,
-		UploadBandwidthBps:    mu.UploadBandwidthBps,
-		UploadPeakBps:         mu.UploadPeakBps,
-		UploadBurstBytes:      mu.UploadBurstBytes,
-		DownloadBandwidthBps:  mu.DownloadBandwidthBps,
-		DownloadPeakBps:       mu.DownloadPeakBps,
-		DownloadBurstBytes:    mu.DownloadBurstBytes,
-		EgressTag:             mu.EgressTag,
-		BurstBitPerSec:        mu.BurstBitPerSec,
-		BurstCreditBytes:      mu.BurstCreditBytes,
-		SustainedBitPerSec:    mu.SustainedBitPerSec,
-		SustainedAfterSeconds: mu.SustainedAfterSeconds,
+		Email:                mu.Email,
+		Level:                mu.Level,
+		BandwidthBps:         mu.BandwidthBps,
+		ConnLimit:            mu.ConnLimit,
+		CommittedBps:         mu.CommittedBps,
+		CommittedBurstBytes:  mu.CommittedBurstBytes,
+		Class:                mu.Class,
+		UploadBandwidthBps:   mu.UploadBandwidthBps,
+		UploadPeakBps:        mu.UploadPeakBps,
+		UploadBurstBytes:     mu.UploadBurstBytes,
+		DownloadBandwidthBps: mu.DownloadBandwidthBps,
+		DownloadPeakBps:      mu.DownloadPeakBps,
+		DownloadBurstBytes:   mu.DownloadBurstBytes,
+		EgressTag:            mu.EgressTag,
+		BurstBitPerSec:       mu.BurstBitPerSec,
+		BurstCreditBytes:     mu.BurstCreditBytes,
+		SustainedBitPerSec:   mu.SustainedBitPerSec,
+		Pool:                 mu.Pool,
 	}
 	// Account 可以没有：socks/http/mixed 这类静态入站会把用户表示成一个
 	// 只带限速的 MemoryUser，密码另外放。序列化回去时必须容忍这一点，
@@ -117,12 +117,13 @@ type MemoryUser struct {
 	// EgressTag pins this authenticated user to an outbound. Empty routes normally.
 	EgressTag string
 
-	// Class identifies the shared fair-scheduling policy group.
+	// Class names the contention parameter group (node_fairshare.go).
 	Class string
 
-	// Three-tier shaping on top of the directional standard rate; see tier_shaper.go.
-	BurstBitPerSec        uint64
-	BurstCreditBytes      uint64
-	SustainedBitPerSec    uint64
-	SustainedAfterSeconds uint32
+	// Pool shaping on top of the directional standard rate; see tier_shaper.go.
+	BurstBitPerSec     uint64
+	BurstCreditBytes   uint64
+	SustainedBitPerSec uint64
+	// Pool names the shaping pool shared by every user object that carries it.
+	Pool string
 }

@@ -1,7 +1,7 @@
 syntax = "proto3";
 
-// app.fairshare.command 是 ipipx 魔改：节点级公平限速配置的 gRPC 下发面。
-// node-agent 收到 NodeConfig（总带宽 + headroom）后调 SetNodeBandwidth 喂进程内调度器。
+// app.fairshare.command：节点级拥塞门控（common/protocol/node_fairshare.go）的下发面。
+// 所有参数由上层下发；0 一律是「没有这一项」，内核不藏默认值。
 package xray.app.fairshare.command;
 option csharp_namespace = "Xray.App.FairShare.Command";
 option go_package = "github.com/xtls/xray-core/app/fairshare/command";
@@ -9,79 +9,51 @@ option java_package = "com.xray.app.fairshare.command";
 option java_multiple_files = true;
 
 service FairShareService {
-  // SetNodeBandwidth 设置节点整形上限 root_cap（avail_bps，已含 headroom 折算）与地板、拥塞滞回。
-  // 0=关闭节点级公平。
+  // SetNodeBandwidth 设置节点整形上限 root_cap 与拥塞滞回。avail_bps = 0 关闭节点级调度。
   rpc SetNodeBandwidth(SetNodeBandwidthRequest) returns (SetNodeBandwidthResponse) {}
 
-  // SetClassPolicy 整份替换客户组争抢策略表。声明式：没出现在请求里的 class 即被删除。
-  // 不另造通道——class 权重、normal_cap、突发信用全走这一个 rpc（FR-079e）。
+  // SetClassPolicy 整份替换 class 表。没出现在请求里的 class 即被删除。
   rpc SetClassPolicy(SetClassPolicyRequest) returns (SetClassPolicyResponse) {}
 
-  // GetStatus 读调度器运行态。存在的理由是回答运维在「这台节点分配看起来不太对」
-  // 时会问的问题——尤其是注水截断，它只表现为「分配有点不公平」，
-  // 不暴露出来就没有任何线索指向它。
+  // GetStatus 读调度器运行态（含实测吞吐，供上层切分共享链路容量）。
   rpc GetStatus(GetStatusRequest) returns (GetStatusResponse) {}
 }
 
-// ⚠️ 单位陷阱（FR-079d）：本文件里的 `_bps` 后缀一律是 **字节/秒**，
-// 而 common/protocol/user.proto 里 User 的 `bandwidth_bps` / `committed_bps` 是 **比特/秒**。
-// 同一个后缀两处含义差 8 倍。这三个历史字段不改名（改名会断掉已经在跑的 node-agent），
-// 改为在此写死语义，并由 command_units_test.go / node_fairshare_units_test.go 两条断言测试钉住；
-// **新增的速率字段一律带 `_byte_per_sec` / `_bit_per_sec` 后缀**，见下方 ClassPolicy。
-// 谁要是「顺手统一成同一单位」，那两条测试会红。
+// ⚠️ 单位：本文件里的速率一律是 **字节/秒**（avail_bps 是历史名字，也是字节/秒），
+// 而 common/protocol/user.proto 里 User 的 `*_bps` 是 **比特/秒**。
 message SetNodeBandwidthRequest {
-  uint64 avail_bps = 1; // root_cap：节点整形上限，**字节/秒** = total_bandwidth_bps × headroom_pct/100。0=关闭节点级公平。
-  uint64 soft_floor_bps = 2; // 公平软地板，**字节/秒**。0 = 无软地板（不是「用默认值」，见 FR-079c）。
-  uint64 hard_floor_bps = 3; // 绝对硬地板，**字节/秒**。0 = 无硬地板。地板只在 floor×活跃人数 ≤ root_cap 时生效。
+  uint64 avail_bps = 1; // root_cap，字节/秒。0 = 关闭节点级调度。
+  reserved 2, 3;        // 旧的节点级软/硬地板，已并入 ClassPolicy.floor_byte_per_sec。
 
-  // 拥塞滞回（FR-076）。都是百分比/计数，没有单位歧义，故不带单位后缀。
-  uint32 congestion_enter_percent = 4; // 节点利用率越过该百分比才进入公平模式。0 = 不做拥塞判定，永远公平模式（= 改造前行为）。
-  uint32 congestion_exit_percent = 5;  // 回落到该百分比以下才考虑退出。0 或高于 enter 时取 enter。
-  uint32 congestion_exit_ticks = 6;    // 需连续多少个 tick（1 tick = 1 秒）低于 exit 才真的退出。0 视为 1。
+  // 拥塞滞回（百分比/计数）。
+  uint32 congestion_enter_percent = 4; // 利用率越过它进入拥挤态。0 = 不做判定，开着就一直按拥挤处理。
+  uint32 congestion_exit_percent = 5;  // 回落到它以下才考虑退出。0 或高于 enter 时取 enter。
+  uint32 congestion_exit_ticks = 6;    // 连续多少个 tick（1 秒）低于 exit 才退出。0 与 1 等价。
 }
 
 message SetNodeBandwidthResponse {}
 
-// ClassPolicy 是一组客户共享的争抢策略。
-// class 名字挂在 User.class 上随实例下发；这张表是运营参数，不进客户界面（FR-079f）。
+// ClassPolicy 是一组池共享的争抢参数，只在拥挤态起作用。0 = 没有这一项。
 message ClassPolicy {
-  string name = 1; // class 名，与 User.class 对应。空名 = 未分类用户的兜底策略。
+  string name = 1;   // 与 User.class 精确匹配。
+  uint32 weight = 2; // 拥挤时按它分剩余带宽。0 与 1 等价。
+  reserved 3, 4, 5, 6, 9; // 旧的 class 级常规上限/突发/地板占比/成员表，已由池整形与下列字段取代。
 
-  // 拥塞时按 weight 分剩余带宽。0 视为 1。直播应高于短视频。
-  uint32 weight = 2;
-
-  // normal_cap：**不拥挤时**这个 class 的单客户最高速率，字节/秒。
-  // ⚠️ 这不是保证带宽/CIR（FR-071）：500 客户 × 20Mbps = 10Gbps，物理上不可能承诺。
-  // 0 = 该 class 不设 class 级上限（仍受客户自己的 PIR/CIR 与 root_cap 约束）。
-  uint64 normal_cap_byte_per_sec = 3;
-
-  // burst_cap：持有突发信用时能冲到的峰值，字节/秒。必须 > normal_cap 才有意义。
-  // 0 = 该 class 不给突发。
-  uint64 burst_cap_byte_per_sec = 4;
-
-  // burst_credit_bytes：突发信用桶容量（字节）。信用只按「超出 normal_cap 的那部分字节」
-  // 扣（FR-078）；低于 normal_cap 时按未用满的差额回补。0 = 不给突发。
-  uint64 burst_credit_bytes = 5;
-
-  // floor_ratio_percent：该 class 的地板 = normal_cap × 该百分比。
-  // 与全局软地板取较大者，且仍受「地板×活跃人数 ≤ root_cap 才生效」的前提约束（FR-077）。
-  // 0 = 该 class 无专属地板。
-  uint32 floor_ratio_percent = 6;
-
-  // An admitted reservation is an aggregate floor for all active members of
-  // this class, not a per-user cap. Unused capacity immediately returns to the
-  // node pool; excess demand may still compete for spare capacity.
+  // class 全体活跃池共享的方向性保底（聚合，不是逐池）；没人用的部分当 tick 回流。
   uint64 upload_reserved_byte_per_sec = 7;
   uint64 download_reserved_byte_per_sec = 8;
 
-  // Stable Client UIDs in this reservation. Runtime membership is keyed by
-  // User.email (the Client UID), so creation/removal affects established
-  // connections without waiting for them to re-authenticate.
-  repeated string member_ids = 9;
+  // 拥挤时每个活跃池的地板（不超过它自己的需求）。整层给得起才给。
+  uint64 floor_byte_per_sec = 10;
+
+  // 重度识别：最近 heavy_window_seconds 秒平均用量 ≥ 标准 × heavy_percent% 的池，
+  // 拥挤时保底 = 它的持续速率，剩余带宽排在正常池之后分。任一为 0 = 不识别。
+  uint32 heavy_window_seconds = 11;
+  uint32 heavy_percent = 12;
 }
 
 message SetClassPolicyRequest {
-  repeated ClassPolicy classes = 1; // 整份替换。空列表 = 清空 class 表（全员同权重、无 class 上限）。
+  repeated ClassPolicy classes = 1; // 整份替换。空列表 = 清空 class 表。
 }
 
 message SetClassPolicyResponse {}
@@ -89,18 +61,20 @@ message SetClassPolicyResponse {}
 message GetStatusRequest {}
 
 message GetStatusResponse {
-  uint64 root_cap_byte_per_sec = 1; // 节点整形上限；0 = 节点级公平没开
-  bool congested = 2;               // 当前是否处于公平模式（不拥塞时根本不削速）
-  uint32 active_members = 3;        // 最近一 tick 的活跃成员数
+  uint64 root_cap_byte_per_sec = 1; // 0 = 节点级调度没开
+  bool congested = 2;               // 当前是否处于拥挤态
+  uint32 active_members = 3;        // 最近一 tick 的活跃池数
 
-  // 注水截断（成员极多且天花板各不相同时，轮数用完还没收敛，余下按权重一次分完）。
-  // 总额仍不超过 root_cap，但那批成员之间的公平性是近似的。
-  // 这四个字段回答运维的三个问题：这一 tick 截断了吗 · 还剩多少成员没轮到 · 持续多久了。
+  // 注水截断：轮数用完还没收敛，余下的按权重一次分完。总额仍不超过 root_cap。
   bool fill_truncated = 4;
-  uint32 fill_unresolved_members = 5; // 在 active_members 里的占比才是重点
-  uint64 fill_truncated_ticks = 6;    // 已连续截断多少 tick（1 tick = 1 秒）；0 = 当前没截断
-  uint64 fill_truncated_total_ticks = 7; // 进程启动以来累计
-  uint32 fill_rounds = 8;             // 最近一 tick 实际跑了几轮；等于上限就是撞顶了
+  uint32 fill_unresolved_members = 5;
+  uint64 fill_truncated_ticks = 6;
+  uint64 fill_truncated_total_ticks = 7;
+  uint32 fill_rounds = 8;
+
+  uint32 heavy_members = 9;                    // 活跃池里被识别为重度的个数
+  uint64 used_upload_byte_per_sec = 10;        // 最近一 tick 的实测吞吐
+  uint64 used_download_byte_per_sec = 11;
 }
 
 // Config 命令服务配置（gRPC server 经 RegisterConfig 实例化本服务）。

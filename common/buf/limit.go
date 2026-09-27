@@ -18,7 +18,6 @@ type RateLimitReader struct {
 	ctx      context.Context
 	limiters []*rate.Limiter
 	pacer    Pacer
-	bypass   func() bool
 }
 
 type RateLimitWriter struct {
@@ -26,29 +25,28 @@ type RateLimitWriter struct {
 	ctx      context.Context
 	limiters []*rate.Limiter
 	pacer    Pacer
-	bypass   func() bool
 }
 
 // Pacer is a per-connection shaper that replaces the token-bucket chain; the
-// three-tier fair shaper (protocol.TierFlow) implements it.
+// pool shaper (protocol.TierFlow) implements it.
 type Pacer interface {
 	Wait(ctx context.Context, n int) error
 }
 
 // NewPacedReader wraps reader with a Pacer. A nil pacer leaves traffic untouched.
-func NewPacedReader(ctx context.Context, reader Reader, bypass func() bool, pacer Pacer) Reader {
+func NewPacedReader(ctx context.Context, reader Reader, pacer Pacer) Reader {
 	if pacer == nil {
 		return reader
 	}
-	return &RateLimitReader{Reader: reader, ctx: ctx, pacer: pacer, bypass: bypass}
+	return &RateLimitReader{Reader: reader, ctx: ctx, pacer: pacer}
 }
 
 // NewPacedWriter wraps writer with a Pacer. A nil pacer leaves traffic untouched.
-func NewPacedWriter(ctx context.Context, writer Writer, bypass func() bool, pacer Pacer) Writer {
+func NewPacedWriter(ctx context.Context, writer Writer, pacer Pacer) Writer {
 	if pacer == nil {
 		return writer
 	}
-	return &RateLimitWriter{Writer: writer, ctx: ctx, pacer: pacer, bypass: bypass}
+	return &RateLimitWriter{Writer: writer, ctx: ctx, pacer: pacer}
 }
 
 func (r *RateLimitReader) wait(n int) error { return paceOrWait(r.ctx, r.pacer, r.limiters, n) }
@@ -103,59 +101,22 @@ func clampBurst(burstBytes uint64) int {
 	return burst
 }
 
-// NewRateLimitReaderWithLimiter wraps reader with a shared token bucket.
-// ctx 绑定连接生命周期：连接关闭后 WaitN 立即返回，不再睡在（与同用户其他连接
-// 共享的）桶上占配额（消除共享桶 FIFO 队头阻塞的最坏形态）。ctx 为 nil 时退化为
-// Background（不取消，仅兜底，调用方应传连接 ctx）。
+// NewRateLimitReaderWithLimiter wraps reader with shared token buckets.
+// ctx 绑定连接生命周期：连接关闭后 WaitN 立即返回，不再睡在共享桶上占配额。
 func NewRateLimitReaderWithLimiter(ctx context.Context, reader Reader, limiters ...*rate.Limiter) Reader {
-	return NewAdaptiveRateLimitReaderWithLimiter(
-		ctx, reader, nil, limiters...,
-	)
-}
-
-// NewAdaptiveRateLimitReaderWithLimiter keeps the ordinary per-user buckets
-// attached but may bypass them dynamically. Bandwidth-reservation membership
-// changes therefore affect established connections without rebuilding links.
-func NewAdaptiveRateLimitReaderWithLimiter(
-	ctx context.Context,
-	reader Reader,
-	bypass func() bool,
-	limiters ...*rate.Limiter,
-) Reader {
 	live := compactLimiters(limiters)
 	if len(live) == 0 {
 		return reader
 	}
-	return &RateLimitReader{
-		Reader:   reader,
-		ctx:      ctx,
-		limiters: live,
-		bypass:   bypass,
-	}
+	return &RateLimitReader{Reader: reader, ctx: ctx, limiters: live}
 }
 
 func NewRateLimitWriterWithLimiter(ctx context.Context, writer Writer, limiters ...*rate.Limiter) Writer {
-	return NewAdaptiveRateLimitWriterWithLimiter(
-		ctx, writer, nil, limiters...,
-	)
-}
-
-func NewAdaptiveRateLimitWriterWithLimiter(
-	ctx context.Context,
-	writer Writer,
-	bypass func() bool,
-	limiters ...*rate.Limiter,
-) Writer {
 	live := compactLimiters(limiters)
 	if len(live) == 0 {
 		return writer
 	}
-	return &RateLimitWriter{
-		Writer:   writer,
-		ctx:      ctx,
-		limiters: live,
-		bypass:   bypass,
-	}
+	return &RateLimitWriter{Writer: writer, ctx: ctx, limiters: live}
 }
 
 // compactLimiters 丢掉 nil。调用方（dispatcher）可以无脑把「峰值桶, 承诺桶」
@@ -207,9 +168,6 @@ func (r *RateLimitReader) readWithTimeout(timeout time.Duration, withTimeout boo
 	if mb.IsEmpty() {
 		return mb, err
 	}
-	if r.bypass != nil && r.bypass() {
-		return mb, err
-	}
 	if waitErr := r.wait(int(mb.Len())); waitErr != nil && err == nil {
 		return mb, waitErr
 	}
@@ -218,9 +176,6 @@ func (r *RateLimitReader) readWithTimeout(timeout time.Duration, withTimeout boo
 
 func (w *RateLimitWriter) WriteMultiBuffer(mb MultiBuffer) error {
 	if mb.IsEmpty() {
-		return w.Writer.WriteMultiBuffer(mb)
-	}
-	if w.bypass != nil && w.bypass() {
 		return w.Writer.WriteMultiBuffer(mb)
 	}
 	if err := w.wait(int(mb.Len())); err != nil {
@@ -232,7 +187,7 @@ func (w *RateLimitWriter) WriteMultiBuffer(mb MultiBuffer) error {
 // rateLimitWaitN 让这一批字节**依次通过每一个桶**（串联整形），全部取到才放行。
 //
 // 串联而不是取最小速率，是因为两个桶的深度不同：峰值桶浅（1/8 秒窗口），承诺桶深
-// （CBS，通常是一天的承诺量）。新连接上来时承诺桶是满的，立刻放行，只有峰值桶在
+// （CBS，控制面给的额度）。新连接上来时承诺桶是满的，立刻放行，只有峰值桶在
 // 排队 → 跑 PIR；CBS 花完后承诺桶开始按 CIR 滴令牌 → 自然落到 CIR。这正是双速率
 // 要的行为，且不需要任何额外的状态机。
 //
@@ -247,7 +202,7 @@ func rateLimitWaitN(ctx context.Context, limiters []*rate.Limiter, total int) er
 	return nil
 }
 
-// rateLimitWaitOne 按 limiter 当前 burst 分片阻塞取令牌（per-user 桶与节点公平桶共用）。
+// rateLimitWaitOne 按 limiter 当前 burst 分片阻塞取令牌。
 //   - ctx 绑定连接生命周期：连接关闭后立即带错返回，不再睡在共享桶上占队。
 //   - burst 每轮动态读：节点公平调度器会并发 SetBurst 调整窗口；若在 Burst() 与
 //     WaitN 之间 burst 被调小，WaitN(n>burst) 会立即报错——此时 ctx 仍存活则按新

@@ -9,19 +9,14 @@ import (
 )
 
 // fairShareServer 实现 FairShareService：把节点级调度参数喂进程内 NodeFairScheduler 单例。
-//
-// ⚠️ 单位：本包收到的 avail_bps / soft_floor_bps / hard_floor_bps 都是**字节/秒**，
-// 原样进调度器，一次都不除 8。除以 8 的地方只有一处，在 common/protocol/user_limits.go，
-// 那里换的是 User 的比特/秒。两边由 command_units_test.go 钉死。
+// 本包的速率都是字节/秒，原样进调度器；0 一律是「没有这一项」。
 type fairShareServer struct{}
 
 func NewFairShareServer() FairShareServiceServer { return &fairShareServer{} }
 
 func (s *fairShareServer) SetNodeBandwidth(ctx context.Context, req *SetNodeBandwidthRequest) (*SetNodeBandwidthResponse, error) {
-	// 地板与滞回先于总额生效，避免开启的那一瞬间用旧参数白算一轮。
-	// 0 一律是「不启用」，不是「用默认值」（FR-079c：不许有默认带宽）。
+	// 滞回先于总额生效，避免开启的那一瞬间用旧参数白算一轮。
 	sched := protocol.FairScheduler()
-	sched.SetFloors(req.GetSoftFloorBps(), req.GetHardFloorBps())
 	sched.SetCongestionHysteresis(req.GetCongestionEnterPercent(), req.GetCongestionExitPercent(), req.GetCongestionExitTicks())
 	sched.SetNodeBandwidth(req.GetAvailBps())
 	return &SetNodeBandwidthResponse{}, nil
@@ -42,13 +37,11 @@ func toClassPolicies(in []*ClassPolicy) []*protocol.ClassPolicy {
 		out = append(out, &protocol.ClassPolicy{
 			Name:                       c.GetName(),
 			Weight:                     c.GetWeight(),
-			NormalCapBytePerSec:        c.GetNormalCapBytePerSec(),
-			BurstCapBytePerSec:         c.GetBurstCapBytePerSec(),
-			BurstCreditBytes:           c.GetBurstCreditBytes(),
-			FloorRatioPercent:          c.GetFloorRatioPercent(),
+			FloorBytePerSec:            c.GetFloorBytePerSec(),
 			UploadReservedBytePerSec:   c.GetUploadReservedBytePerSec(),
 			DownloadReservedBytePerSec: c.GetDownloadReservedBytePerSec(),
-			MemberIDs:                  append([]string(nil), c.GetMemberIds()...),
+			HeavyWindowSeconds:         c.GetHeavyWindowSeconds(),
+			HeavyPercent:               c.GetHeavyPercent(),
 		})
 	}
 	return out
@@ -66,6 +59,9 @@ func (s *fairShareServer) GetStatus(ctx context.Context, req *GetStatusRequest) 
 		FillTruncatedTicks:      st.FillTruncatedTicks,
 		FillTruncatedTotalTicks: st.FillTruncatedTotal,
 		FillRounds:              st.FillRounds,
+		HeavyMembers:            st.HeavyMembers,
+		UsedUploadBytePerSec:    st.UsedUploadBytePerSec,
+		UsedDownloadBytePerSec:  st.UsedDownloadBytePerSec,
 	}, nil
 }
 

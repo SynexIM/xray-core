@@ -39,7 +39,7 @@ type HysteriaUserConfig struct {
 	BandwidthBps uint64 `json:"bandwidth_bps"`
 	ConnLimit    uint32 `json:"conn_limit"`
 	// 双速率（可选）。committed_bps 是承诺速率 CIR，committed_burst_bytes 是
-	// 突发额度 CBS（字节，留空 = 一天的承诺量）。语义见 protocol.User。
+	// 突发额度 CBS（字节，0 = 没有额度）。语义见 protocol.User。
 	CommittedBps        uint64 `json:"committed_bps"`
 	CommittedBurstBytes uint64 `json:"committed_burst_bytes"`
 	// class 标识共享同一争抢策略的客户组，策略表走 fairshare 的 SetClassPolicy 下发。

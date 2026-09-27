@@ -41,17 +41,14 @@ message User {
   // behind the peak one — traffic has to clear both, so a fresh line runs at
   // PIR until its burst allowance drains and then settles at CIR.
   //
-  // committed_burst_bytes = 0 means "one day of the committed rate", which is
-  // the sane default: a customer may spend their daily commitment whenever
-  // they like, at full speed, and still never exceed it over the day.
+  // committed_burst_bytes = 0 means no burst allowance: the committed bucket
+  // keeps its small default window, i.e. plain single-rate CIR.
   // committed_bps above bandwidth_bps is meaningless and is ignored.
   uint64 committed_bps = 6;
   uint64 committed_burst_bytes = 7;
 
-  // class 标识这个用户所属的共享争抢策略客户组（如 "live" / "shortvideo"）。
-  // 权重、normal_cap、突发信用不放在这里——它们是运营参数，走
-  // app.fairshare.command 的 SetClassPolicy 整份下发，这里只带一个名字。
-  // 空 = 未分类，落到 class 表里名字为空的那条兜底策略；没有兜底策略就是同权重、无 class 上限。
+  // class 是争抢参数组的名字（权重、地板、保底、重度识别），参数本身走
+  // app.fairshare.command 的 SetClassPolicy 整份下发。表里没有这个名字 = 不加权、无地板。
   string class = 8;
 
   // Directional limits use the legacy committed/peak/burst contract in bit/s,
@@ -69,16 +66,20 @@ message User {
   // normal routing.
   string egress_tag = 15;
 
-  // Three-tier shaping. Standard is upload/download_bandwidth_bps (or
-  // bandwidth_bps when no direction is set); both directions use these values.
-  //   burst_bit_per_sec + burst_credit_bytes  short peak paid from a credit that
-  //                                           refills while running below standard
-  //   sustained_bit_per_sec                   applied after the credit is empty and
-  //                                           the line stays saturated for
-  //                                           sustained_after_seconds
-  // 0 disables that tier. Mechanism lives in tier_shaper.go.
+  // Pool shaping (tier_shaper.go). Standard is upload/download_bandwidth_bps
+  // (or bandwidth_bps when no direction is set); both directions use these.
+  //   burst_bit_per_sec + burst_credit_bytes  peak above standard paid from a
+  //                                           credit that refills at standard
+  //   sustained_bit_per_sec                   not a cap: the guaranteed rate of a
+  //                                           heavy pool while the node is congested
+  // 0 disables that item.
   uint64 burst_bit_per_sec = 16;
   uint64 burst_credit_bytes = 17;
   uint64 sustained_bit_per_sec = 18;
-  uint32 sustained_after_seconds = 19;
+  reserved 19;
+
+  // pool names the shaping pool. Every user object with the same pool shares
+  // one set of rates and burst credit regardless of inbound or protocol.
+  // Empty = the user's email is its pool.
+  string pool = 20;
 }

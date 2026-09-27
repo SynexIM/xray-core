@@ -4,8 +4,8 @@
 // 	protoc        v6.33.3
 // source: app/fairshare/command/command.proto
 
-// app.fairshare.command 是 ipipx 魔改：节点级公平限速配置的 gRPC 下发面。
-// node-agent 收到 NodeConfig（总带宽 + headroom）后调 SetNodeBandwidth 喂进程内调度器。
+// app.fairshare.command：节点级拥塞门控（common/protocol/node_fairshare.go）的下发面。
+// 所有参数由上层下发；0 一律是「没有这一项」，内核不藏默认值。
 
 package command
 
@@ -24,21 +24,15 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// ⚠️ 单位陷阱（FR-079d）：本文件里的 `_bps` 后缀一律是 **字节/秒**，
-// 而 common/protocol/user.proto 里 User 的 `bandwidth_bps` / `committed_bps` 是 **比特/秒**。
-// 同一个后缀两处含义差 8 倍。这三个历史字段不改名（改名会断掉已经在跑的 node-agent），
-// 改为在此写死语义，并由 command_units_test.go / node_fairshare_units_test.go 两条断言测试钉住；
-// **新增的速率字段一律带 `_byte_per_sec` / `_bit_per_sec` 后缀**，见下方 ClassPolicy。
-// 谁要是「顺手统一成同一单位」，那两条测试会红。
+// ⚠️ 单位：本文件里的速率一律是 **字节/秒**（avail_bps 是历史名字，也是字节/秒），
+// 而 common/protocol/user.proto 里 User 的 `*_bps` 是 **比特/秒**。
 type SetNodeBandwidthRequest struct {
-	state        protoimpl.MessageState `protogen:"open.v1"`
-	AvailBps     uint64                 `protobuf:"varint,1,opt,name=avail_bps,json=availBps,proto3" json:"avail_bps,omitempty"`               // root_cap：节点整形上限，**字节/秒** = total_bandwidth_bps × headroom_pct/100。0=关闭节点级公平。
-	SoftFloorBps uint64                 `protobuf:"varint,2,opt,name=soft_floor_bps,json=softFloorBps,proto3" json:"soft_floor_bps,omitempty"` // 公平软地板，**字节/秒**。0 = 无软地板（不是「用默认值」，见 FR-079c）。
-	HardFloorBps uint64                 `protobuf:"varint,3,opt,name=hard_floor_bps,json=hardFloorBps,proto3" json:"hard_floor_bps,omitempty"` // 绝对硬地板，**字节/秒**。0 = 无硬地板。地板只在 floor×活跃人数 ≤ root_cap 时生效。
-	// 拥塞滞回（FR-076）。都是百分比/计数，没有单位歧义，故不带单位后缀。
-	CongestionEnterPercent uint32 `protobuf:"varint,4,opt,name=congestion_enter_percent,json=congestionEnterPercent,proto3" json:"congestion_enter_percent,omitempty"` // 节点利用率越过该百分比才进入公平模式。0 = 不做拥塞判定，永远公平模式（= 改造前行为）。
-	CongestionExitPercent  uint32 `protobuf:"varint,5,opt,name=congestion_exit_percent,json=congestionExitPercent,proto3" json:"congestion_exit_percent,omitempty"`    // 回落到该百分比以下才考虑退出。0 或高于 enter 时取 enter。
-	CongestionExitTicks    uint32 `protobuf:"varint,6,opt,name=congestion_exit_ticks,json=congestionExitTicks,proto3" json:"congestion_exit_ticks,omitempty"`          // 需连续多少个 tick（1 tick = 1 秒）低于 exit 才真的退出。0 视为 1。
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	AvailBps uint64                 `protobuf:"varint,1,opt,name=avail_bps,json=availBps,proto3" json:"avail_bps,omitempty"` // root_cap，字节/秒。0 = 关闭节点级调度。
+	// 拥塞滞回（百分比/计数）。
+	CongestionEnterPercent uint32 `protobuf:"varint,4,opt,name=congestion_enter_percent,json=congestionEnterPercent,proto3" json:"congestion_enter_percent,omitempty"` // 利用率越过它进入拥挤态。0 = 不做判定，开着就一直按拥挤处理。
+	CongestionExitPercent  uint32 `protobuf:"varint,5,opt,name=congestion_exit_percent,json=congestionExitPercent,proto3" json:"congestion_exit_percent,omitempty"`    // 回落到它以下才考虑退出。0 或高于 enter 时取 enter。
+	CongestionExitTicks    uint32 `protobuf:"varint,6,opt,name=congestion_exit_ticks,json=congestionExitTicks,proto3" json:"congestion_exit_ticks,omitempty"`          // 连续多少个 tick（1 秒）低于 exit 才退出。0 与 1 等价。
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -76,20 +70,6 @@ func (*SetNodeBandwidthRequest) Descriptor() ([]byte, []int) {
 func (x *SetNodeBandwidthRequest) GetAvailBps() uint64 {
 	if x != nil {
 		return x.AvailBps
-	}
-	return 0
-}
-
-func (x *SetNodeBandwidthRequest) GetSoftFloorBps() uint64 {
-	if x != nil {
-		return x.SoftFloorBps
-	}
-	return 0
-}
-
-func (x *SetNodeBandwidthRequest) GetHardFloorBps() uint64 {
-	if x != nil {
-		return x.HardFloorBps
 	}
 	return 0
 }
@@ -151,38 +131,22 @@ func (*SetNodeBandwidthResponse) Descriptor() ([]byte, []int) {
 	return file_app_fairshare_command_command_proto_rawDescGZIP(), []int{1}
 }
 
-// ClassPolicy 是一组客户共享的争抢策略。
-// class 名字挂在 User.class 上随实例下发；这张表是运营参数，不进客户界面（FR-079f）。
+// ClassPolicy 是一组池共享的争抢参数，只在拥挤态起作用。0 = 没有这一项。
 type ClassPolicy struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"` // class 名，与 User.class 对应。空名 = 未分类用户的兜底策略。
-	// 拥塞时按 weight 分剩余带宽。0 视为 1。直播应高于短视频。
-	Weight uint32 `protobuf:"varint,2,opt,name=weight,proto3" json:"weight,omitempty"`
-	// normal_cap：**不拥挤时**这个 class 的单客户最高速率，字节/秒。
-	// ⚠️ 这不是保证带宽/CIR（FR-071）：500 客户 × 20Mbps = 10Gbps，物理上不可能承诺。
-	// 0 = 该 class 不设 class 级上限（仍受客户自己的 PIR/CIR 与 root_cap 约束）。
-	NormalCapBytePerSec uint64 `protobuf:"varint,3,opt,name=normal_cap_byte_per_sec,json=normalCapBytePerSec,proto3" json:"normal_cap_byte_per_sec,omitempty"`
-	// burst_cap：持有突发信用时能冲到的峰值，字节/秒。必须 > normal_cap 才有意义。
-	// 0 = 该 class 不给突发。
-	BurstCapBytePerSec uint64 `protobuf:"varint,4,opt,name=burst_cap_byte_per_sec,json=burstCapBytePerSec,proto3" json:"burst_cap_byte_per_sec,omitempty"`
-	// burst_credit_bytes：突发信用桶容量（字节）。信用只按「超出 normal_cap 的那部分字节」
-	// 扣（FR-078）；低于 normal_cap 时按未用满的差额回补。0 = 不给突发。
-	BurstCreditBytes uint64 `protobuf:"varint,5,opt,name=burst_credit_bytes,json=burstCreditBytes,proto3" json:"burst_credit_bytes,omitempty"`
-	// floor_ratio_percent：该 class 的地板 = normal_cap × 该百分比。
-	// 与全局软地板取较大者，且仍受「地板×活跃人数 ≤ root_cap 才生效」的前提约束（FR-077）。
-	// 0 = 该 class 无专属地板。
-	FloorRatioPercent uint32 `protobuf:"varint,6,opt,name=floor_ratio_percent,json=floorRatioPercent,proto3" json:"floor_ratio_percent,omitempty"`
-	// An admitted reservation is an aggregate floor for all active members of
-	// this class, not a per-user cap. Unused capacity immediately returns to the
-	// node pool; excess demand may still compete for spare capacity.
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Name   string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`      // 与 User.class 精确匹配。
+	Weight uint32                 `protobuf:"varint,2,opt,name=weight,proto3" json:"weight,omitempty"` // 拥挤时按它分剩余带宽。0 与 1 等价。
+	// class 全体活跃池共享的方向性保底（聚合，不是逐池）；没人用的部分当 tick 回流。
 	UploadReservedBytePerSec   uint64 `protobuf:"varint,7,opt,name=upload_reserved_byte_per_sec,json=uploadReservedBytePerSec,proto3" json:"upload_reserved_byte_per_sec,omitempty"`
 	DownloadReservedBytePerSec uint64 `protobuf:"varint,8,opt,name=download_reserved_byte_per_sec,json=downloadReservedBytePerSec,proto3" json:"download_reserved_byte_per_sec,omitempty"`
-	// Stable Client UIDs in this reservation. Runtime membership is keyed by
-	// User.email (the Client UID), so creation/removal affects established
-	// connections without waiting for them to re-authenticate.
-	MemberIds     []string `protobuf:"bytes,9,rep,name=member_ids,json=memberIds,proto3" json:"member_ids,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// 拥挤时每个活跃池的地板（不超过它自己的需求）。整层给得起才给。
+	FloorBytePerSec uint64 `protobuf:"varint,10,opt,name=floor_byte_per_sec,json=floorBytePerSec,proto3" json:"floor_byte_per_sec,omitempty"`
+	// 重度识别：最近 heavy_window_seconds 秒平均用量 ≥ 标准 × heavy_percent% 的池，
+	// 拥挤时保底 = 它的持续速率，剩余带宽排在正常池之后分。任一为 0 = 不识别。
+	HeavyWindowSeconds uint32 `protobuf:"varint,11,opt,name=heavy_window_seconds,json=heavyWindowSeconds,proto3" json:"heavy_window_seconds,omitempty"`
+	HeavyPercent       uint32 `protobuf:"varint,12,opt,name=heavy_percent,json=heavyPercent,proto3" json:"heavy_percent,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ClassPolicy) Reset() {
@@ -229,34 +193,6 @@ func (x *ClassPolicy) GetWeight() uint32 {
 	return 0
 }
 
-func (x *ClassPolicy) GetNormalCapBytePerSec() uint64 {
-	if x != nil {
-		return x.NormalCapBytePerSec
-	}
-	return 0
-}
-
-func (x *ClassPolicy) GetBurstCapBytePerSec() uint64 {
-	if x != nil {
-		return x.BurstCapBytePerSec
-	}
-	return 0
-}
-
-func (x *ClassPolicy) GetBurstCreditBytes() uint64 {
-	if x != nil {
-		return x.BurstCreditBytes
-	}
-	return 0
-}
-
-func (x *ClassPolicy) GetFloorRatioPercent() uint32 {
-	if x != nil {
-		return x.FloorRatioPercent
-	}
-	return 0
-}
-
 func (x *ClassPolicy) GetUploadReservedBytePerSec() uint64 {
 	if x != nil {
 		return x.UploadReservedBytePerSec
@@ -271,16 +207,30 @@ func (x *ClassPolicy) GetDownloadReservedBytePerSec() uint64 {
 	return 0
 }
 
-func (x *ClassPolicy) GetMemberIds() []string {
+func (x *ClassPolicy) GetFloorBytePerSec() uint64 {
 	if x != nil {
-		return x.MemberIds
+		return x.FloorBytePerSec
 	}
-	return nil
+	return 0
+}
+
+func (x *ClassPolicy) GetHeavyWindowSeconds() uint32 {
+	if x != nil {
+		return x.HeavyWindowSeconds
+	}
+	return 0
+}
+
+func (x *ClassPolicy) GetHeavyPercent() uint32 {
+	if x != nil {
+		return x.HeavyPercent
+	}
+	return 0
 }
 
 type SetClassPolicyRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Classes       []*ClassPolicy         `protobuf:"bytes,1,rep,name=classes,proto3" json:"classes,omitempty"` // 整份替换。空列表 = 清空 class 表（全员同权重、无 class 上限）。
+	Classes       []*ClassPolicy         `protobuf:"bytes,1,rep,name=classes,proto3" json:"classes,omitempty"` // 整份替换。空列表 = 清空 class 表。
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -396,17 +346,18 @@ func (*GetStatusRequest) Descriptor() ([]byte, []int) {
 
 type GetStatusResponse struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
-	RootCapBytePerSec uint64                 `protobuf:"varint,1,opt,name=root_cap_byte_per_sec,json=rootCapBytePerSec,proto3" json:"root_cap_byte_per_sec,omitempty"` // 节点整形上限；0 = 节点级公平没开
-	Congested         bool                   `protobuf:"varint,2,opt,name=congested,proto3" json:"congested,omitempty"`                                                // 当前是否处于公平模式（不拥塞时根本不削速）
-	ActiveMembers     uint32                 `protobuf:"varint,3,opt,name=active_members,json=activeMembers,proto3" json:"active_members,omitempty"`                   // 最近一 tick 的活跃成员数
-	// 注水截断（成员极多且天花板各不相同时，轮数用完还没收敛，余下按权重一次分完）。
-	// 总额仍不超过 root_cap，但那批成员之间的公平性是近似的。
-	// 这四个字段回答运维的三个问题：这一 tick 截断了吗 · 还剩多少成员没轮到 · 持续多久了。
+	RootCapBytePerSec uint64                 `protobuf:"varint,1,opt,name=root_cap_byte_per_sec,json=rootCapBytePerSec,proto3" json:"root_cap_byte_per_sec,omitempty"` // 0 = 节点级调度没开
+	Congested         bool                   `protobuf:"varint,2,opt,name=congested,proto3" json:"congested,omitempty"`                                                // 当前是否处于拥挤态
+	ActiveMembers     uint32                 `protobuf:"varint,3,opt,name=active_members,json=activeMembers,proto3" json:"active_members,omitempty"`                   // 最近一 tick 的活跃池数
+	// 注水截断：轮数用完还没收敛，余下的按权重一次分完。总额仍不超过 root_cap。
 	FillTruncated           bool   `protobuf:"varint,4,opt,name=fill_truncated,json=fillTruncated,proto3" json:"fill_truncated,omitempty"`
-	FillUnresolvedMembers   uint32 `protobuf:"varint,5,opt,name=fill_unresolved_members,json=fillUnresolvedMembers,proto3" json:"fill_unresolved_members,omitempty"`         // 在 active_members 里的占比才是重点
-	FillTruncatedTicks      uint64 `protobuf:"varint,6,opt,name=fill_truncated_ticks,json=fillTruncatedTicks,proto3" json:"fill_truncated_ticks,omitempty"`                  // 已连续截断多少 tick（1 tick = 1 秒）；0 = 当前没截断
-	FillTruncatedTotalTicks uint64 `protobuf:"varint,7,opt,name=fill_truncated_total_ticks,json=fillTruncatedTotalTicks,proto3" json:"fill_truncated_total_ticks,omitempty"` // 进程启动以来累计
-	FillRounds              uint32 `protobuf:"varint,8,opt,name=fill_rounds,json=fillRounds,proto3" json:"fill_rounds,omitempty"`                                            // 最近一 tick 实际跑了几轮；等于上限就是撞顶了
+	FillUnresolvedMembers   uint32 `protobuf:"varint,5,opt,name=fill_unresolved_members,json=fillUnresolvedMembers,proto3" json:"fill_unresolved_members,omitempty"`
+	FillTruncatedTicks      uint64 `protobuf:"varint,6,opt,name=fill_truncated_ticks,json=fillTruncatedTicks,proto3" json:"fill_truncated_ticks,omitempty"`
+	FillTruncatedTotalTicks uint64 `protobuf:"varint,7,opt,name=fill_truncated_total_ticks,json=fillTruncatedTotalTicks,proto3" json:"fill_truncated_total_ticks,omitempty"`
+	FillRounds              uint32 `protobuf:"varint,8,opt,name=fill_rounds,json=fillRounds,proto3" json:"fill_rounds,omitempty"`
+	HeavyMembers            uint32 `protobuf:"varint,9,opt,name=heavy_members,json=heavyMembers,proto3" json:"heavy_members,omitempty"`                                // 活跃池里被识别为重度的个数
+	UsedUploadBytePerSec    uint64 `protobuf:"varint,10,opt,name=used_upload_byte_per_sec,json=usedUploadBytePerSec,proto3" json:"used_upload_byte_per_sec,omitempty"` // 最近一 tick 的实测吞吐
+	UsedDownloadBytePerSec  uint64 `protobuf:"varint,11,opt,name=used_download_byte_per_sec,json=usedDownloadBytePerSec,proto3" json:"used_download_byte_per_sec,omitempty"`
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -497,6 +448,27 @@ func (x *GetStatusResponse) GetFillRounds() uint32 {
 	return 0
 }
 
+func (x *GetStatusResponse) GetHeavyMembers() uint32 {
+	if x != nil {
+		return x.HeavyMembers
+	}
+	return 0
+}
+
+func (x *GetStatusResponse) GetUsedUploadBytePerSec() uint64 {
+	if x != nil {
+		return x.UsedUploadBytePerSec
+	}
+	return 0
+}
+
+func (x *GetStatusResponse) GetUsedDownloadBytePerSec() uint64 {
+	if x != nil {
+		return x.UsedDownloadBytePerSec
+	}
+	return 0
+}
+
 // Config 命令服务配置（gRPC server 经 RegisterConfig 实例化本服务）。
 type Config struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -538,30 +510,27 @@ var File_app_fairshare_command_command_proto protoreflect.FileDescriptor
 
 const file_app_fairshare_command_command_proto_rawDesc = "" +
 	"\n" +
-	"#app/fairshare/command/command.proto\x12\x1axray.app.fairshare.command\"\xa8\x02\n" +
+	"#app/fairshare/command/command.proto\x12\x1axray.app.fairshare.command\"\xe8\x01\n" +
 	"\x17SetNodeBandwidthRequest\x12\x1b\n" +
-	"\tavail_bps\x18\x01 \x01(\x04R\bavailBps\x12$\n" +
-	"\x0esoft_floor_bps\x18\x02 \x01(\x04R\fsoftFloorBps\x12$\n" +
-	"\x0ehard_floor_bps\x18\x03 \x01(\x04R\fhardFloorBps\x128\n" +
+	"\tavail_bps\x18\x01 \x01(\x04R\bavailBps\x128\n" +
 	"\x18congestion_enter_percent\x18\x04 \x01(\rR\x16congestionEnterPercent\x126\n" +
 	"\x17congestion_exit_percent\x18\x05 \x01(\rR\x15congestionExitPercent\x122\n" +
-	"\x15congestion_exit_ticks\x18\x06 \x01(\rR\x13congestionExitTicks\"\x1a\n" +
-	"\x18SetNodeBandwidthResponse\"\xa4\x03\n" +
+	"\x15congestion_exit_ticks\x18\x06 \x01(\rR\x13congestionExitTicksJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04\"\x1a\n" +
+	"\x18SetNodeBandwidthResponse\"\xdf\x02\n" +
 	"\vClassPolicy\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
-	"\x06weight\x18\x02 \x01(\rR\x06weight\x124\n" +
-	"\x17normal_cap_byte_per_sec\x18\x03 \x01(\x04R\x13normalCapBytePerSec\x122\n" +
-	"\x16burst_cap_byte_per_sec\x18\x04 \x01(\x04R\x12burstCapBytePerSec\x12,\n" +
-	"\x12burst_credit_bytes\x18\x05 \x01(\x04R\x10burstCreditBytes\x12.\n" +
-	"\x13floor_ratio_percent\x18\x06 \x01(\rR\x11floorRatioPercent\x12>\n" +
+	"\x06weight\x18\x02 \x01(\rR\x06weight\x12>\n" +
 	"\x1cupload_reserved_byte_per_sec\x18\a \x01(\x04R\x18uploadReservedBytePerSec\x12B\n" +
-	"\x1edownload_reserved_byte_per_sec\x18\b \x01(\x04R\x1adownloadReservedBytePerSec\x12\x1d\n" +
-	"\n" +
-	"member_ids\x18\t \x03(\tR\tmemberIds\"Z\n" +
+	"\x1edownload_reserved_byte_per_sec\x18\b \x01(\x04R\x1adownloadReservedBytePerSec\x12+\n" +
+	"\x12floor_byte_per_sec\x18\n" +
+	" \x01(\x04R\x0ffloorBytePerSec\x120\n" +
+	"\x14heavy_window_seconds\x18\v \x01(\rR\x12heavyWindowSeconds\x12#\n" +
+	"\rheavy_percent\x18\f \x01(\rR\fheavyPercentJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05J\x04\b\x05\x10\x06J\x04\b\x06\x10\aJ\x04\b\t\x10\n" +
+	"\"Z\n" +
 	"\x15SetClassPolicyRequest\x12A\n" +
 	"\aclasses\x18\x01 \x03(\v2'.xray.app.fairshare.command.ClassPolicyR\aclasses\"\x18\n" +
 	"\x16SetClassPolicyResponse\"\x12\n" +
-	"\x10GetStatusRequest\"\xf9\x02\n" +
+	"\x10GetStatusRequest\"\x92\x04\n" +
 	"\x11GetStatusResponse\x120\n" +
 	"\x15root_cap_byte_per_sec\x18\x01 \x01(\x04R\x11rootCapBytePerSec\x12\x1c\n" +
 	"\tcongested\x18\x02 \x01(\bR\tcongested\x12%\n" +
@@ -571,7 +540,11 @@ const file_app_fairshare_command_command_proto_rawDesc = "" +
 	"\x14fill_truncated_ticks\x18\x06 \x01(\x04R\x12fillTruncatedTicks\x12;\n" +
 	"\x1afill_truncated_total_ticks\x18\a \x01(\x04R\x17fillTruncatedTotalTicks\x12\x1f\n" +
 	"\vfill_rounds\x18\b \x01(\rR\n" +
-	"fillRounds\"\b\n" +
+	"fillRounds\x12#\n" +
+	"\rheavy_members\x18\t \x01(\rR\fheavyMembers\x126\n" +
+	"\x18used_upload_byte_per_sec\x18\n" +
+	" \x01(\x04R\x14usedUploadBytePerSec\x12:\n" +
+	"\x1aused_download_byte_per_sec\x18\v \x01(\x04R\x16usedDownloadBytePerSec\"\b\n" +
 	"\x06Config2\xfa\x02\n" +
 	"\x10FairShareService\x12\x7f\n" +
 	"\x10SetNodeBandwidth\x123.xray.app.fairshare.command.SetNodeBandwidthRequest\x1a4.xray.app.fairshare.command.SetNodeBandwidthResponse\"\x00\x12y\n" +

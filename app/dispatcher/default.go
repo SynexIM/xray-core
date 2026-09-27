@@ -28,12 +28,12 @@ var errSniffingTimeout = errors.New("timeout on sniffing")
 
 type cachedReader struct {
 	sync.Mutex
-	reader buf.TimeoutReader // *pipe.Reader、限速包装器(*buf.RateLimitReader/*buf.FairLimitReader) 或 *buf.TimeoutWrapperReader
+	reader buf.TimeoutReader // *pipe.Reader、限速包装器 *buf.RateLimitReader 或 *buf.TimeoutWrapperReader
 	cache  buf.MultiBuffer
 }
 
 // asTimeoutReader 把任意 Reader 归一成 TimeoutReader。*pipe.Reader 与限速包装器
-// (*buf.RateLimitReader / *buf.FairLimitReader) 本身都实现 ReadMultiBufferTimeout，
+// *buf.RateLimitReader 本身都实现 ReadMultiBufferTimeout，
 // 其余类型兜底套 TimeoutWrapperReader。禁止对 outbound.Reader 强转 *pipe.Reader：
 // 用户开限速后 Reader 已被包装，强转会 panic 拖崩整个 xray 进程。
 func asTimeoutReader(reader buf.Reader) buf.TimeoutReader {
@@ -105,8 +105,6 @@ func (r *cachedReader) Interrupt() {
 			v.Interrupt()
 			return
 		case *buf.RateLimitReader:
-			reader = v.Reader
-		case *buf.FairLimitReader:
 			reader = v.Reader
 		default:
 			return
@@ -188,37 +186,22 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, destination net.Destina
 	// 效果是**没有 email 的用户永远限不上速，也逃掉节点级公平**——
 	// 拥挤时他们会挤压守规矩的用户。stats 那部分才真的需要 email（计数器名里有它）。
 	if user != nil {
-		// Three-tier users get the fair per-connection shaper; everyone else keeps
-		// the RuntimeDirectionalRateLimiters PIR/CIR/CBS or directional chains.
-		reservationBypass := func() bool {
-			return protocol.FairScheduler().HasReservation(user.Email)
-		}
-		// getLink has two separate pipes: inbound.Reader is download and
-		// outbound.Reader is upload. Each pipe is wrapped once at its read end.
-		if up, down, release := user.AcquireTierShapers(); release != nil {
-			context.AfterFunc(ctx, release)
-			inboundLink.Reader = buf.NewPacedReader(ctx, inboundLink.Reader, reservationBypass, tierPacer(down))
-			outboundLink.Reader = buf.NewPacedReader(ctx, outboundLink.Reader, reservationBypass, tierPacer(up))
-		} else {
+		// 旧的 PIR/CIR/CBS 与方向峰值桶（不走池整形的用户）先挂；池整形器挂在外层，
+		// 拥挤时由节点调度器给它份额。getLink 有两条管道：inbound.Reader 是下行、
+		// outbound.Reader 是上行，各在读端包一次。
+		if !user.UsesTierShaping() {
 			limits := user.RuntimeDirectionalRateLimiters(buf.NewRateLimiterWithBurst)
 			if len(limits.Download) > 0 {
-				inboundLink.Reader = buf.NewAdaptiveRateLimitReaderWithLimiter(
-					ctx, inboundLink.Reader, reservationBypass, limits.Download...,
-				)
+				inboundLink.Reader = buf.NewRateLimitReaderWithLimiter(ctx, inboundLink.Reader, limits.Download...)
 			}
 			if len(limits.Upload) > 0 {
-				outboundLink.Reader = buf.NewAdaptiveRateLimitReaderWithLimiter(
-					ctx, outboundLink.Reader, reservationBypass, limits.Upload...,
-				)
+				outboundLink.Reader = buf.NewRateLimitReaderWithLimiter(ctx, outboundLink.Reader, limits.Upload...)
 			}
 		}
-		// 节点级公平限速（ipipx 魔改）：套在 per-user 桶之外，双向整形使「节点总出口」生效。
-		// 节点公平未开启时 Acquire 返回 nil，wrapper 直通（零开销）。
-		// 同上：每条管道包一次，且方向要对——down 喂 downlink 读端，up 喂 uplink 读端。
-		if h := protocol.FairScheduler().Acquire(user); h != nil {
-			inboundLink.Reader = buf.NewFairLimitReader(ctx, inboundLink.Reader, h.Down, h.DownOnBytes, h.DownOnBlocked) // downlink ← down
-			outboundLink.Reader = buf.NewFairLimitReader(ctx, outboundLink.Reader, h.Up, h.UpOnBytes, h.UpOnBlocked)     // uplink ← up
-			context.AfterFunc(ctx, h.Release)
+		if up, down, release := user.AcquireTierShapers(); release != nil {
+			context.AfterFunc(ctx, release)
+			inboundLink.Reader = buf.NewPacedReader(ctx, inboundLink.Reader, tierPacer(down))
+			outboundLink.Reader = buf.NewPacedReader(ctx, outboundLink.Reader, tierPacer(up))
 		}
 	}
 
@@ -301,31 +284,19 @@ func WrapLink(ctx context.Context, policyManager policy.Manager, statsManager st
 
 	// 同上：限速与公平只看用户本身，有没有 email 与它无关。
 	if user != nil {
-		reservationBypass := func() bool {
-			return protocol.FairScheduler().HasReservation(user.Email)
+		if !user.UsesTierShaping() {
+			limits := user.RuntimeDirectionalRateLimiters(buf.NewRateLimiterWithBurst)
+			if len(limits.Upload) > 0 {
+				link.Reader = buf.NewRateLimitReaderWithLimiter(ctx, link.Reader, limits.Upload...)
+			}
+			if len(limits.Download) > 0 {
+				link.Writer = buf.NewRateLimitWriterWithLimiter(ctx, link.Writer, limits.Download...)
+			}
 		}
 		if up, down, release := user.AcquireTierShapers(); release != nil {
 			context.AfterFunc(ctx, release)
-			link.Reader = buf.NewPacedReader(ctx, link.Reader, reservationBypass, tierPacer(up))
-			link.Writer = buf.NewPacedWriter(ctx, link.Writer, reservationBypass, tierPacer(down))
-		} else {
-			limits := user.RuntimeDirectionalRateLimiters(buf.NewRateLimiterWithBurst)
-			if len(limits.Upload) > 0 {
-				link.Reader = buf.NewAdaptiveRateLimitReaderWithLimiter(
-					ctx, link.Reader, reservationBypass, limits.Upload...,
-				)
-			}
-			if len(limits.Download) > 0 {
-				link.Writer = buf.NewAdaptiveRateLimitWriterWithLimiter(
-					ctx, link.Writer, reservationBypass, limits.Download...,
-				)
-			}
-		}
-		// 节点级公平限速：套在 per-user 桶之外，双向整形使「节点总出口」生效。
-		if h := protocol.FairScheduler().Acquire(user); h != nil {
-			link.Reader = buf.NewFairLimitReader(ctx, link.Reader, h.Up, h.UpOnBytes, h.UpOnBlocked)
-			link.Writer = buf.NewFairLimitWriter(ctx, link.Writer, h.Down, h.DownOnBytes, h.DownOnBlocked)
-			context.AfterFunc(ctx, h.Release)
+			link.Reader = buf.NewPacedReader(ctx, link.Reader, tierPacer(up))
+			link.Writer = buf.NewPacedWriter(ctx, link.Writer, tierPacer(down))
 		}
 	}
 

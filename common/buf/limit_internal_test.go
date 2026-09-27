@@ -130,30 +130,3 @@ func TestRateLimitWrappersDropNilLimiters(t *testing.T) {
 		t.Errorf("nil 没被丢掉：limiters = %v", rl.limiters)
 	}
 }
-
-func TestAdaptiveRateLimitBypassChangesOnEstablishedWrapper(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	bypassed := false
-	limiter := rate.NewLimiter(rate.Limit(1), Size)
-	reader := NewAdaptiveRateLimitReaderWithLimiter(
-		ctx,
-		repeatingRateLimitReader{size: 2 * Size},
-		func() bool { return bypassed },
-		limiter,
-	)
-	first, err := reader.ReadMultiBuffer()
-	first = ReleaseMulti(first)
-	if err == nil {
-		t.Fatal("ordinary per-user limiter was unexpectedly bypassed")
-	}
-
-	// Same wrapper, same already-cancelled connection context: a live
-	// reservation membership switch must bypass the old per-user bucket.
-	bypassed = true
-	second, err := reader.ReadMultiBuffer()
-	second = ReleaseMulti(second)
-	if err != nil {
-		t.Fatalf("dynamic reservation bypass did not take effect: %v", err)
-	}
-}
