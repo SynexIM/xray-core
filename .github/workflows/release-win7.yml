@@ -97,6 +97,21 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
+      - name: Configure module access
+        # go.mod replaces github.com/xtls/reality with github.com/SynexIM/reality.
+        # That repo is public, so the normal anonymous fetch works; the token is an
+        # optional escape hatch for a window where it is not public yet.
+        env:
+          PRIVATE_MODULE_TOKEN: ${{ secrets.PRIVATE_MODULE_TOKEN }}
+        run: |
+          if [ -n "${PRIVATE_MODULE_TOKEN}" ]; then
+            echo "GOPRIVATE=github.com/SynexIM/*" >> "$GITHUB_ENV"
+            git config --global \
+              url."https://x-access-token:${PRIVATE_MODULE_TOKEN}@github.com/".insteadOf \
+              "https://github.com/"
+          else
+            echo "No PRIVATE_MODULE_TOKEN set; fetching github.com/SynexIM/* anonymously."
+          fi
       - name: Setup patched builder
         run: |
           GOSDK=$(go env GOROOT)

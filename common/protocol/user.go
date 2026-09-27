@@ -28,28 +28,101 @@ func (u *User) ToMemoryUser() (*MemoryUser, error) {
 	if err != nil {
 		return nil, err
 	}
+	mu := u.RuntimeMemoryUser()
+	mu.Account = account
+	return mu, nil
+}
+
+// RuntimeMemoryUser copies identity and every runtime limit without parsing the
+// account; mixed/socks boot accounts keep credentials outside protocol.User.
+func (u *User) RuntimeMemoryUser() *MemoryUser {
 	return &MemoryUser{
-		Account: account,
-		Email:   u.Email,
-		Level:   u.Level,
-	}, nil
+		Email:                 u.Email,
+		Level:                 u.Level,
+		BandwidthBps:          u.BandwidthBps,
+		ConnLimit:             u.ConnLimit,
+		CommittedBps:          u.CommittedBps,
+		CommittedBurstBytes:   u.CommittedBurstBytes,
+		Class:                 u.Class,
+		UploadBandwidthBps:    u.UploadBandwidthBps,
+		UploadPeakBps:         u.UploadPeakBps,
+		UploadBurstBytes:      u.UploadBurstBytes,
+		DownloadBandwidthBps:  u.DownloadBandwidthBps,
+		DownloadPeakBps:       u.DownloadPeakBps,
+		DownloadBurstBytes:    u.DownloadBurstBytes,
+		EgressTag:             u.EgressTag,
+		BurstBitPerSec:        u.BurstBitPerSec,
+		BurstCreditBytes:      u.BurstCreditBytes,
+		SustainedBitPerSec:    u.SustainedBitPerSec,
+		SustainedAfterSeconds: u.SustainedAfterSeconds,
+	}
 }
 
 func ToProtoUser(mu *MemoryUser) *User {
 	if mu == nil {
 		return nil
 	}
-	return &User{
-		Account: serial.ToTypedMessage(mu.Account.ToProto()),
-		Email:   mu.Email,
-		Level:   mu.Level,
+	u := &User{
+		Email:                 mu.Email,
+		Level:                 mu.Level,
+		BandwidthBps:          mu.BandwidthBps,
+		ConnLimit:             mu.ConnLimit,
+		CommittedBps:          mu.CommittedBps,
+		CommittedBurstBytes:   mu.CommittedBurstBytes,
+		Class:                 mu.Class,
+		UploadBandwidthBps:    mu.UploadBandwidthBps,
+		UploadPeakBps:         mu.UploadPeakBps,
+		UploadBurstBytes:      mu.UploadBurstBytes,
+		DownloadBandwidthBps:  mu.DownloadBandwidthBps,
+		DownloadPeakBps:       mu.DownloadPeakBps,
+		DownloadBurstBytes:    mu.DownloadBurstBytes,
+		EgressTag:             mu.EgressTag,
+		BurstBitPerSec:        mu.BurstBitPerSec,
+		BurstCreditBytes:      mu.BurstCreditBytes,
+		SustainedBitPerSec:    mu.SustainedBitPerSec,
+		SustainedAfterSeconds: mu.SustainedAfterSeconds,
 	}
+	// Account 可以没有：socks/http/mixed 这类静态入站会把用户表示成一个
+	// 只带限速的 MemoryUser，密码另外放。序列化回去时必须容忍这一点，
+	// 直接解引用会在这条路径上 panic。
+	if mu.Account != nil {
+		u.Account = serial.ToTypedMessage(mu.Account.ToProto())
+	}
+	return u
 }
 
 // MemoryUser is a parsed form of User, to reduce number of parsing of Account proto.
 type MemoryUser struct {
 	// Account is the parsed account of the protocol.
-	Account Account
-	Email   string
-	Level   uint32
+	Account      Account
+	Email        string
+	Level        uint32
+	BandwidthBps uint64
+	ConnLimit    uint32
+	// Symmetric PIR/CIR/CBS limits. These remain the source of truth whenever
+	// no directional field is set.
+	CommittedBps        uint64
+	CommittedBurstBytes uint64
+
+	// Directional limits use independent committed/peak/burst buckets. Their
+	// presence switches only per-user shaping; class/fair scheduling remains
+	// orthogonal.
+	UploadBandwidthBps   uint64
+	UploadPeakBps        uint64
+	UploadBurstBytes     uint64
+	DownloadBandwidthBps uint64
+	DownloadPeakBps      uint64
+	DownloadBurstBytes   uint64
+
+	// EgressTag pins this authenticated user to an outbound. Empty routes normally.
+	EgressTag string
+
+	// Class identifies the shared fair-scheduling policy group.
+	Class string
+
+	// Three-tier shaping on top of the directional standard rate; see tier_shaper.go.
+	BurstBitPerSec        uint64
+	BurstCreditBytes      uint64
+	SustainedBitPerSec    uint64
+	SustainedAfterSeconds uint32
 }

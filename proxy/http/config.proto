@@ -7,10 +7,33 @@ option java_package = "com.xray.proxy.http";
 option java_multiple_files = true;
 
 import "common/protocol/server_spec.proto";
+import "common/protocol/user.proto";
 
 message Account {
   string username = 1;
   string password = 2;
+}
+
+// UserAccount carries one boot-time user with protocol-agnostic per-user runtime
+// limits (bandwidth + connection caps). 0 means unlimited. The runtime AddUser
+// path carries the same limits on the top-level protocol.User instead.
+message UserAccount {
+  string username = 1;
+  string password = 2;
+  uint64 bandwidth_bps = 3;
+  uint32 conn_limit = 4;
+  // Dual-rate shaping, same meaning as protocol.User: committed_bps is the CIR
+  // and committed_burst_bytes the CBS. 0 keeps plain single-rate behaviour.
+  uint64 committed_bps = 5;
+  uint64 committed_burst_bytes = 6;
+
+  // class 标识共享同一争抢策略的客户组。权重 / normal_cap / 突发信用是运营参数，
+  // 走 app.fairshare.command 的 SetClassPolicy 整份下发，这里只带一个名字。
+  string class = 7;
+
+  // Runtime identity and limits (email, directional, three-tier, egress_tag).
+  // When present it is authoritative and its account is ignored.
+  xray.common.protocol.User runtime = 8;
 }
 
 // Config for HTTP proxy server.
@@ -18,6 +41,9 @@ message ServerConfig {
   map<string, string> accounts = 2;
   bool allow_transparent = 3;
   uint32 user_level = 4;
+  // Per-user accounts with limits. Preferred over `accounts`; both are merged at
+  // startup into the in-memory user store.
+  repeated UserAccount user_accounts = 5;
 }
 
 message Header {

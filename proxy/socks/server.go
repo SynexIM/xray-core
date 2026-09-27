@@ -31,6 +31,7 @@ type Server struct {
 	policyManager policy.Manager
 	cone          bool
 	httpServer    *http.Server
+	users         *http.UserStore
 }
 
 // NewServer creates a new Server object.
@@ -40,15 +41,49 @@ func NewServer(ctx context.Context, config *ServerConfig) (*Server, error) {
 		config:        config,
 		policyManager: v.GetFeature(policy.ManagerType()).(policy.Manager),
 		cone:          ctx.Value("cone").(bool),
+		users:         http.NewUserStore(config.UserLevel, config.Accounts, config.UserAccounts),
 	}
 	httpConfig := &http.ServerConfig{
 		UserLevel: config.UserLevel,
 	}
-	if config.AuthType == AuthType_PASSWORD {
-		httpConfig.Accounts = config.Accounts
-	}
 	s.httpServer, _ = http.NewServer(ctx, httpConfig)
+	// Share one user store so a mixed inbound resolves SOCKS5 and HTTP auth to the
+	// same *MemoryUser, keeping per-user bandwidth / connection / fair-share limits
+	// consistent across both protocols on the same listener.
+	s.httpServer.SetUserStore(s.users)
 	return s, nil
+}
+
+// AddUser implements proxy.UserManager.
+func (s *Server) AddUser(ctx context.Context, u *protocol.MemoryUser) error {
+	return s.users.Add(u)
+}
+
+// RemoveUser implements proxy.UserManager.
+func (s *Server) RemoveUser(ctx context.Context, email string) error {
+	s.users.Remove(email)
+	return nil
+}
+
+// UpdateUser implements proxy.UserUpdater. The socks and http inbounds share one
+// UserStore, so updating here also updates the HTTP view of the same mixed user.
+func (s *Server) UpdateUser(ctx context.Context, u *protocol.MemoryUser) error {
+	return s.users.Update(u)
+}
+
+// GetUser implements proxy.UserManager.
+func (s *Server) GetUser(ctx context.Context, email string) *protocol.MemoryUser {
+	return s.users.Get(email)
+}
+
+// GetUsers implements proxy.UserManager.
+func (s *Server) GetUsers(ctx context.Context) []*protocol.MemoryUser {
+	return s.users.GetAll()
+}
+
+// GetUsersCount implements proxy.UserManager.
+func (s *Server) GetUsersCount(context.Context) int64 {
+	return int64(len(s.users.GetAll()))
 }
 
 func (s *Server) policy() policy.Session {
@@ -107,6 +142,7 @@ func (s *Server) processTCP(ctx context.Context, conn stat.Connection, dispatche
 
 	svrSession := &ServerSession{
 		config:       s.config,
+		users:        s.users,
 		address:      inbound.Gateway.Address,
 		port:         inbound.Gateway.Port,
 		localAddress: net.IPAddress(conn.LocalAddr().(*net.TCPAddr).IP),
@@ -133,7 +169,9 @@ func (s *Server) processTCP(ctx context.Context, conn stat.Connection, dispatche
 		return errors.New("failed to read request").Base(err)
 	}
 	if request.User != nil {
-		inbound.User.Email = request.User.Email
+		// Reuse the shared per-user instance (carrying limits) so the dispatcher
+		// enforces this user's bandwidth/connection caps uniformly.
+		inbound.User = request.User
 	}
 
 	if err := conn.SetReadDeadline(time.Time{}); err != nil {

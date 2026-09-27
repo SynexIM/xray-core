@@ -30,6 +30,10 @@ type Stats struct {
 	UserDownlink bool
 	// Whether or not to enable online map for user.
 	UserOnline bool
+	// Whether or not to enable per-(user,destination-site) traffic counters.
+	// Off by default: per-domain counters are unbounded in cardinality, so this
+	// is opt-in for deployments that want site-level traffic aggregation.
+	UserSite bool
 }
 
 // Buffer contains settings for internal buffer.

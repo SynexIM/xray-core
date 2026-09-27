@@ -91,6 +91,35 @@ type UserManager interface {
 	GetUsersCount(context.Context) int64
 }
 
+// UserUpdater is an optional capability for UserManagers that can mutate an
+// existing user in place (credentials and per-user runtime limits) keyed by
+// email, without the remove+add churn that drops live connections. It is kept
+// separate from UserManager so only the proxies that support it (the static
+// socks/http/mixed inbounds used by residential) implement it; other proxies
+// remain unchanged and the UpdateUser command surfaces an explicit
+// "not supported" error for them instead of a silent fallback.
+type UserUpdater interface {
+	UpdateUser(context.Context, *protocol.MemoryUser) error
+}
+
+// BatchUserManager is an optional capability for UserManagers that can apply a
+// whole batch of adds or removes with one table rebuild and one lock
+// acquisition.
+//
+// 为什么值得单独一个接口：SS2022 的 EIH 表在 sing-shadowsocks 里只能整份重建，
+// 逐个增删 5000 个客户 = 重建 5000 次全表，实测 5 万用户底数下这条路要跑好几分钟，
+// 期间认证路径被那把锁一段一段地卡住。批量入口把它压成一次重建、一次锁。
+//
+// 与 UserUpdater 同样是可选能力：没实现的 proxy 由调用方退回逐个走法，
+// 不需要每个协议都写一遍——它们的增删本来就是 O(1)，批量对它们没有额外好处。
+//
+// 批量必须是原子的：批里有一个坏的就整批不生效。半截生效的下发会让面板与节点
+// 的 configHash 对不上，而那种漂移要人肉去查。
+type BatchUserManager interface {
+	AddUsers(context.Context, []*protocol.MemoryUser) error
+	RemoveUsers(context.Context, []string) error
+}
+
 type GetInbound interface {
 	GetInbound() Inbound
 }
@@ -730,14 +759,15 @@ func CopyRawConnIfExist(ctx context.Context, readerConn net.Conn, writerConn net
 	if inbound == nil || inbound.CanSpliceCopy == 3 {
 		return readV(ctx, reader, writer, timer, readCounter)
 	}
+	if requiresBufferedCopy(inbound.User) {
+		return readV(ctx, reader, writer, timer, readCounter)
+	}
 	outbounds := session.OutboundsFromContext(ctx)
 	if len(outbounds) == 0 {
 		return readV(ctx, reader, writer, timer, readCounter)
 	}
-	for _, ob := range outbounds {
-		if ob.CanSpliceCopy == 3 {
-			return readV(ctx, reader, writer, timer, readCounter)
-		}
+	if outboundRequiresBufferedCopy(outbounds) {
+		return readV(ctx, reader, writer, timer, readCounter)
 	}
 
 	for {
@@ -789,6 +819,32 @@ func CopyRawConnIfExist(ctx context.Context, readerConn net.Conn, writerConn net
 			return err
 		}
 	}
+}
+
+func outboundRequiresBufferedCopy(outbounds []*session.Outbound) bool {
+	for _, ob := range outbounds {
+		if ob.CanSpliceCopy == 3 || ob.ForceBufferedCopy {
+			return true
+		}
+	}
+	return false
+}
+
+// requiresBufferedCopy keeps governed users on the transport.Link path. Linux
+// splice copies directly between sockets and would bypass the per-user wrappers
+// installed by the dispatcher on that link.
+//
+// 节点级公平限速开启时对【所有】用户强制 buffered copy：splice 零拷贝直通会绕过
+// dispatcher 挂的 FairLimit 包装器——无 per-user 限速的用户既逃公平整形，也不进
+// 活跃字节统计（不占公平份额分母），拥挤时挤压守规矩用户。代价：公平开启 = 全节点
+// 放弃 splice 的零拷贝极限吞吐（产品决策：公平 > 极限吞吐）；公平未启用时保留 splice。
+func requiresBufferedCopy(user *protocol.MemoryUser) bool {
+	if protocol.FairScheduler().Enabled() {
+		return true
+	}
+	// 必须问「有没有任何限制」，不能只问 bandwidth_bps：只配了承诺速率（CIR）的
+	// 用户 bandwidth_bps 是 0，漏判就会走 splice，限速配了却一个字节都限不住。
+	return user.HasRuntimeLimits()
 }
 
 func readV(ctx context.Context, reader buf.Reader, writer buf.Writer, timer signal.ActivityUpdater, readCounter stats.Counter) error {

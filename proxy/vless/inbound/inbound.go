@@ -243,8 +243,17 @@ func (h *Handler) AddUser(ctx context.Context, u *protocol.MemoryUser) error {
 
 // RemoveUser implements proxy.UserManager.RemoveUser().
 func (h *Handler) RemoveUser(ctx context.Context, e string) error {
-	h.RemoveReverse(h.validator.GetByEmail(e))
-	return h.validator.Del(e)
+	u := h.validator.GetByEmail(e)
+	h.RemoveReverse(u)
+	if u != nil {
+		u.ResetRuntimeLimiter()
+		u.ResetRuntimeConnections()
+	}
+	if err := h.validator.Del(e); err != nil {
+		return err
+	}
+	cleanupUserStats(h.stats, e)
+	return nil
 }
 
 // GetUser implements proxy.UserManager.GetUser().
@@ -639,6 +648,16 @@ func (h *Handler) Process(ctx context.Context, network net.Network, connection s
 		return errors.New("failed to dispatch request").Base(err)
 	}
 	return nil
+}
+
+func cleanupUserStats(sm stats.Manager, email string) {
+	if sm == nil || email == "" {
+		return
+	}
+	prefix := "user>>>" + email + ">>>"
+	sm.UnregisterCounter(prefix + "traffic>>>uplink")
+	sm.UnregisterCounter(prefix + "traffic>>>downlink")
+	sm.UnregisterOnlineMap(prefix + "online")
 }
 
 type Reverse struct {

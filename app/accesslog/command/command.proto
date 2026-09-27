@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+// app.accesslog.command 是 ipipx 魔改：访问聚合结果的 gRPC 拉取面（仿 app/stats/command）。
+package xray.app.accesslog.command;
+option csharp_namespace = "Xray.App.AccessLog.Command";
+option go_package = "github.com/xtls/xray-core/app/accesslog/command";
+option java_package = "com.xray.app.accesslog.command";
+option java_multiple_files = true;
+
+// AccessLogService 暴露进程内聚合窗口给 node-agent。
+service AccessLogService {
+  // PullAccess 拉取当前聚合窗口；reset=true 时读后清空（与 stats QueryStats(reset) 同心智）。
+  // top_n>0 时每 email 按访问次数降序保留 top_n，长尾折叠进 domain="(other)" 一条。
+  rpc PullAccess(PullAccessRequest) returns (AccessReport) {}
+}
+
+message PullAccessRequest {
+  bool  reset = 1;
+  int32 top_n = 2;
+}
+
+// AccessReport / InstanceAccess / SiteVisit 形状对齐后端 nodecontrolv1（node 侧做一次映射）。
+message AccessReport {
+  repeated InstanceAccess instances = 1;
+  uint64                  dropped   = 2; // 背压丢弃事件数（channel 满 + 单 email 站点上限溢出）
+}
+
+message InstanceAccess {
+  string             email = 1;
+  repeated SiteVisit sites = 2;
+}
+
+message SiteVisit {
+  string domain     = 1; // 嗅探域名（无则空）
+  string ip         = 2; // 目标 IP
+  uint64 count      = 3;
+  uint64 first_seen = 4; // unix 秒
+  uint64 last_seen  = 5;
+  uint64 up_bytes   = 6; // v1 恒 0（站点级字节未采集，由 #2 per-user stats 提供总量）
+  uint64 down_bytes = 7; // v1 恒 0
+}
+
+// Config 命令服务配置（gRPC server 经 RegisterConfig 实例化本服务）。
+message Config {}

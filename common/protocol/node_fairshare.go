@@ -1,0 +1,1090 @@
+package protocol
+
+import (
+	"context"
+	"sort"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/xtls/xray-core/common/errors"
+	"golang.org/x/time/rate"
+)
+
+// NodeFairScheduler 是节点级【自适应带宽调度器】：work-conserving 加权 max-min 公平
+// （注水法），对标运营商 BNG 里的 Subscriber-aware Hierarchical QoS。
+//
+// 一句话：每秒看一眼谁真的还想要更多，把节点出口按权重注给他们，谁也不预留。
+//
+//	每 tick 把活跃成员分两类
+//	  satisfied   本 tick 从未因等令牌阻塞  →  他就要这么多，demand = 实测吞吐
+//	  backlogged  阻塞过                    →  他还想要更多，具体多少不必猜
+//	分配
+//	  1  地板先扣掉（前提：地板×活跃人数 ≤ root_cap，给不起就不给）
+//	  2  satisfied 按实测吞吐（+ 一点余量）钉住，扣掉
+//	  3  剩下的池子在 backlogged 里按 weight 分
+//	  4  谁分到超过自己天花板就钉住、多的还池，回 3 再分，直到无人新饱和
+//
+// 与旧实现（share = avail / len(active) 纯人头均分）的三个关键区别：
+//
+//	① 只想要 0.17 Mbps 的人不再占着一整份 —— 剩余带宽真的流向高需求者（FR-073）。
+//	② 地板有前提。旧实现无条件把每个人抬到硬地板，节点最挤时发出的额度可达 root_cap
+//	   的 5 倍，队列排到上游运营商缓冲区里去，节点级公平在最需要它的时刻完全失效。
+//	   主人 2026-08-22 裁定：选「节点总出口守得住」（FR-077）。
+//	③ 不拥挤时根本不削速（FR-076），越过上阈值才进公平模式，滞回退出。
+//
+// 额度总量契约（完成定义 #4）：**只要调度器进入约束态**——即有成员被权重份额压住，
+// 而不是拿到自己想要的全部——Σ allocation ≤ root_cap，一个字节都不多发。
+// 反过来，没人被压住时（大家加起来都没要满）每人发的是各自天花板，合计可以大于
+// root_cap：那不是超发，那是 work-conserving 的定义，因为没人真的想要那么多。
+//
+// 与 per-user 限速共存：节点公平是【正交的第二层桶】，套在 per-user 桶之外（双向）。
+//   - unlimited 用户（BandwidthBps==0）：per-user 桶为 nil，节点公平仍给它挂桶纳入公平。
+//   - 双向出口：per-user 限速只在 uplink(Reader)；节点公平 Reader+Writer 都挂。
+//
+// 热路径：限速 wrapper 的读/写各过一次 WaitN（per-email limiter 锁，非全局锁）+ 两次
+// 原子累加。recompute 在后台 1s 一次，不在转发热路径。
+type NodeFairScheduler struct {
+	mu      sync.Mutex             // 保护 members / 拥塞状态的复合读写
+	members map[string]*fairMember // email → 成员（同 email 跨连接共享一组桶）
+
+	// root_cap：节点整形上限（字节/秒，已含 headroom）。0 = 不开节点级公平。
+	// ⚠️ 字节/秒。MemoryUser.BandwidthBps 是比特/秒，差 8 倍，见 node_fairshare_units_test.go。
+	rootCapBytePerSec atomic.Uint64
+
+	// 地板（字节/秒）。0 = 无地板 —— **不是「用默认值」**（FR-079c：不许有默认带宽）。
+	softFloorBytePerSec atomic.Uint64
+	hardFloorBytePerSec atomic.Uint64
+
+	// 拥塞滞回（FR-076）。enter=0 表示不做拥塞判定、永远公平模式。
+	congestionEnterPercent atomic.Uint32
+	congestionExitPercent  atomic.Uint32
+	congestionExitTicks    atomic.Uint32
+
+	// class 策略与预留成员索引同一份 copy-on-write 快照，避免策略和成员两次
+	// swap 之间出现“已经绕过实例桶、预留地板还没生效”的瞬间。
+	classes atomic.Pointer[classPolicySnapshot]
+
+	congested      bool // mu，任一方向拥塞
+	upCongestion   fairCongestionState
+	downCongestion fairCongestionState
+
+	// 注水截断的运行态。用原子量存，是为了让 Status() 不必去抢 recompute 的锁
+	// ——运维查状态不该有机会拖慢转发。
+	fillTruncated      atomic.Bool   // 最近一 tick 是否截断
+	fillRounds         atomic.Uint32 // 最近一 tick 实际用了几轮
+	fillUnresolved     atomic.Uint32 // 截断时还有多少成员没轮到（被一次分完的那批）
+	fillTruncatedTicks atomic.Uint64 // 已连续截断多少 tick（0 = 当前没截断）
+	fillTruncatedTotal atomic.Uint64 // 进程启动以来累计截断了多少 tick
+	activeMembers      atomic.Uint32 // 最近一 tick 的活跃成员数（截断数字的分母）
+
+	started atomic.Bool // 后台 recompute goroutine 是否已启动（懒启动）
+}
+
+// ClassPolicy 是一组客户共享的争抢策略，随 SetClassPolicy 整份下发。
+type ClassPolicy struct {
+	Name   string
+	Weight uint32 // 0 视为 1
+
+	// NormalCapBytePerSec 是「不挤的时候你能一直跑到这么快」，**不是保证带宽/CIR**
+	// （FR-071：500 客户 × 20Mbps = 10Gbps，物理上不可能承诺）。0 = 无 class 级上限。
+	NormalCapBytePerSec uint64
+
+	// BurstCapBytePerSec / BurstCreditBytes 见 burst_credit.go。
+	BurstCapBytePerSec uint64
+	BurstCreditBytes   uint64
+
+	// FloorRatioPercent：该 class 的地板 = NormalCapBytePerSec × 百分比。0 = 无专属地板。
+	FloorRatioPercent uint32
+
+	// Reserved 是该 class 全体活跃成员共享的方向性保底，不是逐成员保底。
+	// 控制面已经做原子容量准入；运行时只在有真实需求时发放，未用部分立即回流。
+	UploadReservedBytePerSec   uint64
+	DownloadReservedBytePerSec uint64
+	MemberIDs                  []string
+}
+
+type classPolicySnapshot struct {
+	byName              map[string]*ClassPolicy
+	reservationByMember map[string]string
+}
+
+// fairMember 是一个 email 在节点公平里的成员态。同一 email 的所有连接共享 up/down 两个桶。
+type fairMember struct {
+	user *MemoryUser // 天花板实时读（UpdateUser 改限速即生效）
+
+	upLimiter   *rate.Limiter // 上行（Reader）公平桶
+	downLimiter *rate.Limiter // 下行（Writer）公平桶
+
+	conns atomic.Int64 // 当前活跃连接数
+
+	// bytes/blocked 是旧测试与进程内兼容入口；生产热路径写 up/down。
+	// recompute 把兼容增量同时投影到两个方向，因此旧的对称契约不变。
+	bytes   atomic.Uint64
+	blocked atomic.Uint64
+	up      fairDirectionState
+	down    fairDirectionState
+
+	// 以下字段仅 recompute goroutine 访问，mu 保护。
+	lastBytes   uint64
+	lastBlocked uint64
+	lastDelta   uint64 // 上一 tick 实测吞吐（字节/秒，tick=1s）
+
+	active    bool
+	idleTicks int
+	zeroTicks int
+
+	credit burstCredit // 突发信用（burst_credit.go）
+
+	// 每轮注水的临时量（不跨 tick 存活，放这里只为省 map 分配）。
+	backlogged bool
+	weight     uint64
+	ceiling    uint64
+	floor      uint64
+	want       uint64
+	alloc      uint64
+	pinned     bool
+}
+
+type fairDirectionState struct {
+	bytes   atomic.Uint64
+	blocked atomic.Uint64
+
+	lastBytes   uint64
+	lastBlocked uint64
+	lastDelta   uint64
+	active      bool
+	idleTicks   int
+	backlogged  bool
+	allocation  uint64
+}
+
+type fairCongestionState struct {
+	congested      bool
+	belowExitTicks int
+}
+
+type fairDirection uint8
+
+const (
+	fairUpload fairDirection = iota + 1
+	fairDownload
+)
+
+type fillOutcome struct {
+	truncated  bool
+	rounds     int
+	unresolved int
+	active     int
+}
+
+var nodeFairScheduler = &NodeFairScheduler{members: make(map[string]*fairMember)}
+
+// FairScheduler 返回进程级单例（节点 = 单 xray 进程）。
+func FairScheduler() *NodeFairScheduler { return nodeFairScheduler }
+
+const (
+	fairRecomputeEvery     = time.Second
+	fairRecomputeEveryMsec = 1000
+
+	// 活跃判定滞回：进入活跃阈值 > 4KB/tick（滤 keepalive）；退出需增量 < 1KB
+	// 且连续 3 tick。中间带 [1KB, 4KB] 保持原状态。
+	fairActiveEnterDeltaB = 4 * 1024
+	fairActiveExitDeltaB  = 1 * 1024
+	fairActiveExitTicks   = 3
+
+	// satisfied 成员的余量：把「他刚才跑了多少」当需求，直接钉在那个数上会让他下一
+	// tick 立刻撞桶变成 backlogged，再下一 tick 又变回 satisfied —— 每秒来回抖。
+	// 给 1/8 的抬头让他稳住，同时不至于把带宽虚占给用不掉的人。
+	fairSatisfiedHeadroomDiv = 8
+
+	// 注水轮数上限。正常两三轮收敛（每轮至少钉住一个成员）；成员极多且天花板各不
+	// 相同时最坏是 O(N) 轮，5 万成员会把 1 秒的 tick 跑穿。截断后把余下的池子按权重
+	// 一次分完 —— 少数几个本可以再钉住的成员分到略多一点，公平性误差远小于跑不完。
+	//
+	// **故意不做成可配置的。** 想调低它是为了省 CPU，但真正的成本来自成员数而不是
+	// 轮数（5 万成员 8 轮约 40 万次比较，离 1 秒的预算差着两个数量级），调低救不了
+	// 慢机器；想调高是为了公平精度，可正常两三轮就收敛了，调高什么也买不到。
+	// 与其开一个没人知道该填什么的旋钮，不如把截断本身暴露出来（见 FairShareStatus）
+	// ——真有一天它天天在截断，那时候拿着数字再决定，比现在猜一个数强。
+	fairFillMaxRounds = 8
+
+	// 截断持续时的复述间隔（tick）。截断只在**进入/退出**时各记一行日志，
+	// 否则每秒一行就成了另一种「没人看」；但一直截断下去日志里又会什么都没有，
+	// 所以每 5 分钟复述一次，带上已经持续多久。
+	fairTruncationRestateTicks = 300
+
+	// 惰性清理：连续 10 分钟（600 tick）零字节且零连接的成员移除。
+	fairMemberExpireTicks = 600
+
+	// burst 下限 = 单次读缓冲（buf.Size=8KB；不 import buf 避免包环）。
+	fairBurstFloorB = 8 * 1024
+)
+
+// SetNodeBandwidth 设置 root_cap（字节/秒，已含 headroom 折算）。0=关闭节点级公平。
+func (s *NodeFairScheduler) SetNodeBandwidth(rootCapBytePerSec uint64) {
+	s.rootCapBytePerSec.Store(rootCapBytePerSec)
+}
+
+// RootCapBytePerSec 返回当前节点整形上限（测试/观测用）。
+func (s *NodeFairScheduler) RootCapBytePerSec() uint64 { return s.rootCapBytePerSec.Load() }
+
+// Enabled 节点级公平是否开启（root_cap > 0）。
+func (s *NodeFairScheduler) Enabled() bool { return s.rootCapBytePerSec.Load() > 0 }
+
+// SetFloors 设置软/硬地板（字节/秒）。**0 = 无地板**，不是「用默认值」（FR-079c）。
+// 地板本身还有前提：地板 × 活跃人数 ≤ root_cap 才生效，给不起就不给（FR-077）。
+func (s *NodeFairScheduler) SetFloors(softBytePerSec, hardBytePerSec uint64) {
+	s.softFloorBytePerSec.Store(softBytePerSec)
+	s.hardFloorBytePerSec.Store(hardBytePerSec)
+}
+
+// FloorsBytePerSec 返回当前生效的软/硬地板（观测与测试用）。
+// 返回 0 就是真的没有地板 —— 这个读口存在的意义之一，就是让「0 有没有被偷偷换成
+// 默认值」这件事可以被断言。
+func (s *NodeFairScheduler) FloorsBytePerSec() (soft, hard uint64) {
+	return s.softFloorBytePerSec.Load(), s.hardFloorBytePerSec.Load()
+}
+
+// SetCongestionHysteresis 设置拥塞进出阈值（百分比）与退出所需的连续 tick 数。
+// enterPercent = 0 表示不做拥塞判定：永远处于公平模式（改造前的行为）。
+func (s *NodeFairScheduler) SetCongestionHysteresis(enterPercent, exitPercent, exitTicks uint32) {
+	s.congestionEnterPercent.Store(enterPercent)
+	s.congestionExitPercent.Store(exitPercent)
+	s.congestionExitTicks.Store(exitTicks)
+}
+
+// SetClassPolicies 整份替换 class 策略表（声明式，与面板下发同心智）。
+// copy-on-write：换指针，读端不加锁。
+func (s *NodeFairScheduler) SetClassPolicies(policies []*ClassPolicy) {
+	snapshot := &classPolicySnapshot{
+		byName:              make(map[string]*ClassPolicy, len(policies)),
+		reservationByMember: make(map[string]string),
+	}
+	for _, p := range policies {
+		if p == nil {
+			continue
+		}
+		cp := *p
+		cp.MemberIDs = append([]string(nil), p.MemberIDs...)
+		snapshot.byName[cp.Name] = &cp
+		if cp.UploadReservedBytePerSec == 0 &&
+			cp.DownloadReservedBytePerSec == 0 {
+			continue
+		}
+		for _, memberID := range cp.MemberIDs {
+			if memberID != "" {
+				snapshot.reservationByMember[memberID] = cp.Name
+			}
+		}
+	}
+	s.classes.Store(snapshot)
+}
+
+// ClassPolicyFor 返回某 class 名生效的策略：先精确匹配，再落到名字为空的兜底策略。
+// 都没有则返回 nil（同权重、无 class 上限、无突发）。
+func (s *NodeFairScheduler) ClassPolicyFor(name string) *ClassPolicy {
+	snapshot := s.classes.Load()
+	if snapshot == nil {
+		return nil
+	}
+	if p := snapshot.byName[name]; p != nil {
+		return p
+	}
+	if name == "" {
+		return nil
+	}
+	return snapshot.byName[""]
+}
+
+// HasReservation is the hot-path switch for the instance-level limiter.
+// Membership lives in the class snapshot rather than MemoryUser.Class, so
+// add/remove takes effect on established connections in the same policy swap.
+func (s *NodeFairScheduler) HasReservation(memberID string) bool {
+	snapshot := s.classes.Load()
+	return snapshot != nil && snapshot.reservationByMember[memberID] != ""
+}
+
+func (s *NodeFairScheduler) classNameFor(member *fairMember) string {
+	if member == nil || member.user == nil {
+		return ""
+	}
+	snapshot := s.classes.Load()
+	if snapshot != nil {
+		if name := snapshot.reservationByMember[member.user.Email]; name != "" {
+			return name
+		}
+	}
+	return member.user.Class
+}
+
+// fairOwnLimitBytesPerSecond 返回这个用户的【实际天花板】（字节/秒），
+// 0 = 他自己没有天花板（调用点据此当作 ∞，只受份额与 class 约束）。
+//
+// 为什么不能只看 BandwidthBps：双速率语义里「PIR = 0 且设了 CIR」等于单速率 CIR
+// （见 RuntimeRateLimiters）。只读 BandwidthBps 的话，这种用户会被当成不限速，
+// 拥挤时分到他根本跑不满的份额，节点容量白白空转。
+//
+// 实际天花板 = 他能跑到的最快速度：有 PIR 时是 PIR（CIR 只在 CBS 花完后才压更低，
+// 那是长期均值，不是天花板），没有 PIR 时 CIR 就是天花板。
+func fairOwnLimitBytesPerSecond(user *MemoryUser) uint64 {
+	if user == nil {
+		return 0
+	}
+	return bitsPerSecondToRuntimeBytesPerSecond(user.runtimeCeilingBps())
+}
+
+func fairOwnDirectionalLimitBytesPerSecond(
+	user *MemoryUser,
+	direction fairDirection,
+) uint64 {
+	if user == nil {
+		return 0
+	}
+	if !user.hasDirectionalLimits() {
+		return fairOwnLimitBytesPerSecond(user)
+	}
+	var bits uint64
+	switch direction {
+	case fairUpload:
+		bits = directionCeilingBps(
+			user.UploadBandwidthBps, user.UploadPeakBps,
+		)
+	case fairDownload:
+		bits = directionCeilingBps(
+			user.DownloadBandwidthBps, user.DownloadPeakBps,
+		)
+	}
+	return bitsPerSecondToRuntimeBytesPerSecond(bits)
+}
+
+// Member 取（或懒建）某 user 的公平成员，返回上/下行桶。节点公平未开启时返回 (nil,nil)。
+//
+// 用 email 作 key（非 *MemoryUser 指针）：UpdateUser 会换 *MemoryUser 实例，但 email 稳定。
+func (s *NodeFairScheduler) Member(user *MemoryUser) (up, down *rate.Limiter) {
+	if user == nil || len(user.Email) == 0 || !s.Enabled() {
+		return nil, nil
+	}
+	s.ensureStarted()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := s.members[user.Email]
+	if m == nil {
+		m = &fairMember{user: user}
+		// 先发一桶突发信用再算初始速率，否则新客户的头一秒永远跑基准 ——
+		// 「打开网页觉得很快」正好发生在那一秒里。
+		m.credit.settle(s.ClassPolicyFor(s.classNameFor(m)), 0, 0)
+		// 初始速率 = 他自己的天花板，下一轮 recompute 才可能按拥塞压低。
+		root := s.rootCapBytePerSec.Load()
+		upInit := s.ceilingForDirection(m, root, fairUpload)
+		downInit := s.ceilingForDirection(m, root, fairDownload)
+		m.upLimiter = rate.NewLimiter(
+			rate.Limit(upInit), s.burstFor(m, upInit),
+		)
+		m.downLimiter = rate.NewLimiter(
+			rate.Limit(downInit), s.burstFor(m, downInit),
+		)
+		s.members[user.Email] = m
+	} else {
+		m.user = user // 刷新为最新 MemoryUser
+	}
+	return m.upLimiter, m.downLimiter
+}
+
+// FairHooks 是一条连接挂节点公平所需的全部东西。Acquire 返回 nil 表示节点公平
+// 未开启或该用户不参与，调用方据此不挂 wrapper（零开销）。
+type FairHooks struct {
+	Up   *rate.Limiter // 上行（Reader）
+	Down *rate.Limiter // 下行（Writer）
+
+	// 方向性观测不能混在一起：预留上传 20 Mbps 不能靠下载流量把上传桶抬高。
+	UpOnBytes, DownOnBytes     func(n int)
+	UpOnBlocked, DownOnBlocked func(waited time.Duration, n int)
+
+	// Release 连接结束时调，挂 context.AfterFunc。
+	Release func()
+}
+
+// Acquire 取某 user 的节点公平挂载（一连接一次，在 dispatcher 热路径调）。
+func (s *NodeFairScheduler) Acquire(user *MemoryUser) *FairHooks {
+	up, down := s.Member(user)
+	if up == nil {
+		return nil
+	}
+	email := user.Email
+	s.mu.Lock()
+	m := s.members[email]
+	if m != nil {
+		m.conns.Add(1)
+	}
+	s.mu.Unlock()
+	if m == nil {
+		return nil
+	}
+	return &FairHooks{
+		Up:            up,
+		Down:          down,
+		UpOnBytes:     func(n int) { m.up.bytes.Add(uint64(n)) },
+		DownOnBytes:   func(n int) { m.down.bytes.Add(uint64(n)) },
+		UpOnBlocked:   func(time.Duration, int) { m.up.blocked.Add(1) },
+		DownOnBlocked: func(time.Duration, int) { m.down.blocked.Add(1) },
+		Release:       func() { m.conns.Add(-1) },
+	}
+}
+
+// ensureStarted 懒启动后台 recompute goroutine（一次性）。
+func (s *NodeFairScheduler) ensureStarted() {
+	if s.started.CompareAndSwap(false, true) {
+		go s.run()
+	}
+}
+
+func (s *NodeFairScheduler) run() {
+	t := time.NewTicker(fairRecomputeEvery)
+	defer t.Stop()
+	for range t.C {
+		s.recompute()
+	}
+}
+
+// recompute 是每 tick 的全部工作：采样 → 拥塞判定 → 注水 → 落桶。
+func (s *NodeFairScheduler) recompute() {
+	root := s.rootCapBytePerSec.Load()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if root == 0 || len(s.members) == 0 {
+		return
+	}
+
+	var usedUpload, usedDownload uint64
+	for email, m := range s.members {
+		legacyCurrent := m.bytes.Load()
+		legacyDelta := legacyCurrent - m.lastBytes
+		m.lastBytes = legacyCurrent
+		legacyBlockedCurrent := m.blocked.Load()
+		legacyBlocked := legacyBlockedCurrent != m.lastBlocked
+		m.lastBlocked = legacyBlockedCurrent
+
+		uploadDelta := sampleFairDirection(
+			&m.up, legacyDelta, legacyBlocked,
+		)
+		downloadDelta := sampleFairDirection(
+			&m.down, legacyDelta, legacyBlocked,
+		)
+		usedUpload += uploadDelta
+		usedDownload += downloadDelta
+
+		// 突发信用结算：所有成员都结（空闲的人正是要回补信用的人）。
+		// 兼容入口把同一增量投影到双向，信用只扣一次；生产方向增量则按总和扣。
+		creditDelta := uploadDelta + downloadDelta
+		if legacyDelta > 0 {
+			creditDelta -= legacyDelta
+		}
+		m.credit.settle(
+			s.ClassPolicyFor(s.classNameFor(m)), creditDelta,
+			fairRecomputeEveryMsec,
+		)
+
+		// 惰性清理：连续 fairMemberExpireTicks 轮零字节且零连接 → 移除。
+		if uploadDelta == 0 && downloadDelta == 0 && m.conns.Load() == 0 {
+			m.zeroTicks++
+			if m.zeroTicks >= fairMemberExpireTicks {
+				delete(s.members, email)
+				continue
+			}
+		} else {
+			m.zeroTicks = 0
+		}
+	}
+
+	uploadOutcome, uploadCongested := s.allocateDirection(
+		root, usedUpload, fairUpload, &s.upCongestion,
+	)
+	downloadOutcome, downloadCongested := s.allocateDirection(
+		root, usedDownload, fairDownload, &s.downCongestion,
+	)
+	s.congested = uploadCongested || downloadCongested
+	outcome := fillOutcome{
+		truncated: uploadOutcome.truncated || downloadOutcome.truncated,
+		rounds:    max(uploadOutcome.rounds, downloadOutcome.rounds),
+		unresolved: max(
+			uploadOutcome.unresolved, downloadOutcome.unresolved,
+		),
+		active: max(uploadOutcome.active, downloadOutcome.active),
+	}
+	s.noteFill(
+		outcome.truncated, outcome.rounds, outcome.unresolved, outcome.active,
+	)
+	for _, m := range s.members {
+		s.setDirectionalLimit(
+			m, m.up.allocation, m.down.allocation,
+		)
+		// 旧测试/观测把 alloc 与 active 当作对称上行视图。
+		m.alloc = m.up.allocation
+		m.active = m.up.active
+	}
+}
+
+func sampleFairDirection(
+	state *fairDirectionState,
+	legacyDelta uint64,
+	legacyBlocked bool,
+) uint64 {
+	current := state.bytes.Load()
+	delta := current - state.lastBytes + legacyDelta
+	state.lastBytes = current
+	state.lastDelta = delta
+	blockedCurrent := state.blocked.Load()
+	state.backlogged = blockedCurrent != state.lastBlocked || legacyBlocked
+	state.lastBlocked = blockedCurrent
+
+	// 活跃滞回：中间带 [exit, enter] 保持原状态，退出需连续 N tick 低于阈值。
+	if state.active {
+		if delta < fairActiveExitDeltaB {
+			state.idleTicks++
+			if state.idleTicks >= fairActiveExitTicks {
+				state.active = false
+				state.idleTicks = 0
+			}
+		} else {
+			state.idleTicks = 0
+		}
+	} else if delta > fairActiveEnterDeltaB {
+		state.active = true
+		state.idleTicks = 0
+	}
+	return delta
+}
+
+func (s *NodeFairScheduler) allocateDirection(
+	root, used uint64,
+	direction fairDirection,
+	congestion *fairCongestionState,
+) (fillOutcome, bool) {
+	active := make([]*fairMember, 0, len(s.members))
+	for _, m := range s.members {
+		state := directionState(m, direction)
+		if !state.active {
+			state.allocation = s.ceilingForDirection(m, root, direction)
+			continue
+		}
+		m.lastDelta = state.lastDelta
+		m.backlogged = state.backlogged
+		active = append(active, m)
+	}
+	congested := s.updateCongestion(congestion, used, root)
+	if len(active) == 0 || !congested {
+		for _, m := range active {
+			directionState(m, direction).allocation =
+				s.ceilingForDirection(m, root, direction)
+		}
+		return fillOutcome{active: len(active)}, congested
+	}
+	outcome := s.fill(active, root, direction)
+	for _, m := range active {
+		directionState(m, direction).allocation = m.alloc
+	}
+	return outcome, congested
+}
+
+func directionState(
+	member *fairMember,
+	direction fairDirection,
+) *fairDirectionState {
+	if direction == fairDownload {
+		return &member.down
+	}
+	return &member.up
+}
+
+func (m *fairMember) className() string {
+	if m.user == nil {
+		return ""
+	}
+	return m.user.Class
+}
+
+// updateCongestion 维护拥塞滞回状态，返回本 tick 是否处于公平模式。
+//
+// enter = 0：不做判定，永远公平模式（= 改造前行为，也是「不配就不启用滞回」）。
+// 越过 enter 进入；回落到 exit 以下并连续 exitTicks 个 tick 才退出 ——
+// 避免在 89%/91%/89% 之间反复抖动（FR-076）。
+func (s *NodeFairScheduler) updateCongestion(
+	state *fairCongestionState,
+	used, root uint64,
+) bool {
+	enter := uint64(s.congestionEnterPercent.Load())
+	if enter == 0 {
+		state.congested = true
+		state.belowExitTicks = 0
+		return true
+	}
+	exit := uint64(s.congestionExitPercent.Load())
+	if exit == 0 || exit > enter {
+		exit = enter
+	}
+	exitTicks := int(s.congestionExitTicks.Load())
+	if exitTicks == 0 {
+		exitTicks = 1
+	}
+	util := used * 100 / root
+
+	if !state.congested {
+		if util >= enter {
+			state.congested = true
+			state.belowExitTicks = 0
+		}
+		return state.congested
+	}
+	if util <= exit {
+		state.belowExitTicks++
+		if state.belowExitTicks >= exitTicks {
+			state.congested = false
+			state.belowExitTicks = 0
+		}
+	} else {
+		state.belowExitTicks = 0
+	}
+	return state.congested
+}
+
+// ceilingFor 是这个成员任何时刻都不该超过的速率：
+// min(root_cap, 他买的天花板, 他 class 当前允许的峰值)。
+func (s *NodeFairScheduler) ceilingFor(m *fairMember, root uint64) uint64 {
+	return s.ceilingForDirection(m, root, fairUpload)
+}
+
+func (s *NodeFairScheduler) ceilingForDirection(
+	m *fairMember,
+	root uint64,
+	direction fairDirection,
+) uint64 {
+	c := root
+	if own := fairOwnDirectionalLimitBytesPerSecond(
+		m.user, direction,
+	); own > 0 && own < c {
+		c = own
+	}
+	if p := s.ClassPolicyFor(s.classNameFor(m)); p != nil {
+		if cls := m.credit.ceilingBytePerSec(p); cls > 0 && cls < c {
+			c = cls
+		}
+	}
+	return c
+}
+
+// fill 是注水法本体：加权 max-min 公平，结果写进每个成员的 alloc。
+//
+// 约束态（有人被权重份额压住）时 Σ alloc ≤ root；非约束态（大家加起来都没要满）
+// 直接把每人放到自己的天花板 —— work-conserving 的定义，不是超发。
+func (s *NodeFairScheduler) fill(
+	active []*fairMember,
+	root uint64,
+	direction fairDirection,
+) fillOutcome {
+	for _, m := range active {
+		m.ceiling = s.ceilingForDirection(m, root, direction)
+		m.weight = 1
+		if p := s.ClassPolicyFor(s.classNameFor(m)); p != nil && p.Weight > 0 {
+			m.weight = uint64(p.Weight)
+		}
+		switch {
+		case m.backlogged:
+			// 阻塞过 = 还想要更多，具体多少不必猜：拿他的天花板当需求上界。
+			m.want = m.ceiling
+		default:
+			// satisfied：需求就是实测吞吐，加 1/8 抬头防每秒抖动。
+			m.want = m.lastDelta + m.lastDelta/fairSatisfiedHeadroomDiv
+			if m.want > m.ceiling {
+				m.want = m.ceiling
+			}
+		}
+	}
+
+	s.assignFloors(active, root, direction)
+
+	pool := root
+	for _, m := range active {
+		m.alloc = m.floor
+		m.pinned = false
+		pool -= m.floor // assignFloors 已保证 Σ floor ≤ root
+
+		if m.want < m.floor {
+			m.want = m.floor
+		}
+		if m.ceiling <= m.floor {
+			m.alloc = m.floor
+			m.pinned = true
+		}
+	}
+
+	constrained := false
+	truncated := false
+	rounds := 0
+	unresolved := 0
+	for round := 0; ; round++ {
+		rounds = round
+		var totalWeight uint64
+		unresolved = 0
+		for _, m := range active {
+			if !m.pinned {
+				totalWeight += m.weight
+				unresolved++
+			}
+		}
+		if totalWeight == 0 {
+			break
+		}
+		if round >= fairFillMaxRounds {
+			// 轮数用完还没收敛：把余下的池子按权重一次分完。总额仍然守得住，
+			// 只是本可以再钉住的那几个成员会分到略多一点。
+			// 这件事必须被看见 —— 运维只看到「分配有点不公平」，是查不出来的。
+			splitRemainder(active, pool, totalWeight)
+			constrained = true
+			truncated = true
+			break
+		}
+		// 一轮之内所有人对着**同一个** (pool, totalWeight) 快照判定，钉住之后
+		// 再一次性扣掉。边判边扣的话，同一轮里排在后面的成员看到的池子更小，
+		// 而 active 是从 map 里遍历出来的、顺序每 tick 都不一样 ——
+		// 同样的节点状态会算出不同的分配，抖动还查不出原因。
+		progressed := false
+		var consumed uint64
+		for _, m := range active {
+			if m.pinned {
+				continue
+			}
+			if share := m.floor + pool*m.weight/totalWeight; m.want <= share {
+				m.alloc = m.want
+				consumed += m.want - m.floor
+				m.pinned = true
+				progressed = true
+			}
+		}
+		pool -= consumed
+		if !progressed {
+			// 无人新饱和 → 剩下的按权重分完，这一步就是「被压住」。
+			splitRemainder(active, pool, totalWeight)
+			constrained = true
+			break
+		}
+	}
+	if !constrained {
+		// 谁也没被压住 —— 节点其实不挤，别拿上一 tick 的实测吞吐把人钉死，
+		// 否则一个刚开始下载的人要好几秒才能爬上来。
+		for _, m := range active {
+			m.alloc = m.ceiling
+		}
+	}
+	return fillOutcome{
+		truncated: truncated, rounds: rounds,
+		unresolved: unresolved, active: len(active),
+	}
+}
+
+func splitRemainder(active []*fairMember, pool, totalWeight uint64) {
+	for _, m := range active {
+		if m.pinned {
+			continue
+		}
+		m.alloc = m.floor + pool*m.weight/totalWeight
+		m.pinned = true
+	}
+}
+
+// assignFloors 给每个活跃成员定地板，并保证 Σ floor ≤ root。
+//
+// 这是与旧行为最重要的区别（FR-077）。旧代码在 share < hard 时无条件把每个人抬到
+// hard，不管 hard×N 是否给得起：160,000 B/s 的节点、50 个活跃用户，全员抬到 16,384
+// → 合计 819,200，是 root_cap 的 5.1 倍。发出去的额度比水管还大，队列就排到上游
+// 运营商的缓冲区里去了，那里我们既看不见也控制不了。
+//
+// 现在按三档往下退：
+//
+//	A  max(class 地板, 软地板)  给得起就用
+//	B  硬地板                  给得起就用
+//	C  不给                    拥挤到人均 0.1 Mbps 时地板没有意义，那就是纯公平竞争
+//
+// 地板还要被自己的天花板夹住：给一个只买了 8KB/s 的人 16KB/s 的地板毫无意义，
+// 他也跑不掉，白白吃掉别人的份额。
+func (s *NodeFairScheduler) assignFloors(
+	active []*fairMember,
+	root uint64,
+	direction fairDirection,
+) {
+	soft := s.softFloorBytePerSec.Load()
+	hard := s.hardFloorBytePerSec.Load()
+	if soft > 0 && hard > soft {
+		hard = soft // 倒挂夹平
+	}
+	for _, m := range active {
+		m.floor = 0
+	}
+	s.assignReservedFloors(active, root, direction)
+
+	var sum uint64
+	softConfigured := soft > 0
+	for _, m := range active {
+		f := soft
+		if p := s.ClassPolicyFor(s.classNameFor(m)); p != nil && p.FloorRatioPercent > 0 {
+			softConfigured = true
+			if cf := p.NormalCapBytePerSec * uint64(p.FloorRatioPercent) / 100; cf > f {
+				f = cf
+			}
+		}
+		if f > m.ceiling {
+			f = m.ceiling
+		}
+		sum += max(m.floor, f)
+	}
+	// sum == 0 表示这一档根本没配（不是「配了但正好为零」），要继续往下试硬地板，
+	// 否则「只配硬地板不配软地板」这个最常见的配法会一路静默地退化成无地板。
+	if softConfigured && sum <= root {
+		for _, m := range active {
+			f := soft
+			if p := s.ClassPolicyFor(s.classNameFor(m)); p != nil &&
+				p.FloorRatioPercent > 0 {
+				f = max(
+					f,
+					p.NormalCapBytePerSec*
+						uint64(p.FloorRatioPercent)/100,
+				)
+			}
+			m.floor = max(m.floor, min(f, m.ceiling))
+		}
+		return
+	}
+
+	sum = 0
+	for _, m := range active {
+		f := hard
+		if f > m.ceiling {
+			f = m.ceiling
+		}
+		sum += max(m.floor, f)
+	}
+	if hard > 0 && sum <= root {
+		for _, m := range active {
+			m.floor = max(m.floor, min(hard, m.ceiling))
+		}
+		return
+	}
+}
+
+// assignReservedFloors grants each admitted class its aggregate directional
+// floor before ordinary SQ floors. Members share only what they can use; idle
+// reservation capacity returns to the common pool in the same tick.
+func (s *NodeFairScheduler) assignReservedFloors(
+	active []*fairMember,
+	root uint64,
+	direction fairDirection,
+) {
+	groups := make(map[string][]*fairMember)
+	for _, member := range active {
+		className := s.classNameFor(member)
+		policy := s.ClassPolicyFor(className)
+		if reservedForDirection(policy, direction) == 0 {
+			continue
+		}
+		groups[className] = append(
+			groups[className], member,
+		)
+	}
+	names := make([]string, 0, len(groups))
+	for name := range groups {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	remainingRoot := root
+	for _, name := range names {
+		if remainingRoot == 0 {
+			return
+		}
+		members := groups[name]
+		sort.Slice(members, func(i, j int) bool {
+			return members[i].user.Email < members[j].user.Email
+		})
+		reserved := min(
+			reservedForDirection(s.ClassPolicyFor(name), direction),
+			remainingRoot,
+		)
+		used := allocateAggregateFloor(members, reserved)
+		remainingRoot -= used
+	}
+}
+
+func reservedForDirection(
+	policy *ClassPolicy,
+	direction fairDirection,
+) uint64 {
+	if policy == nil {
+		return 0
+	}
+	if direction == fairDownload {
+		return policy.DownloadReservedBytePerSec
+	}
+	return policy.UploadReservedBytePerSec
+}
+
+func allocateAggregateFloor(
+	members []*fairMember,
+	capacity uint64,
+) uint64 {
+	pending := append([]*fairMember(nil), members...)
+	remaining := capacity
+	var used uint64
+	for len(pending) > 0 && remaining > 0 {
+		share := remaining / uint64(len(pending))
+		if share == 0 {
+			for index := uint64(0); index < remaining; index++ {
+				member := pending[index]
+				if member.floor < member.want {
+					member.floor++
+					used++
+				}
+			}
+			break
+		}
+		next := pending[:0]
+		progressed := false
+		for _, member := range pending {
+			need := member.want - member.floor
+			if need <= share {
+				member.floor += need
+				remaining -= need
+				used += need
+				progressed = true
+				continue
+			}
+			next = append(next, member)
+		}
+		if progressed {
+			pending = next
+			continue
+		}
+		for _, member := range pending {
+			member.floor += share
+			remaining -= share
+			used += share
+		}
+		for index := 0; remaining > 0 && index < len(pending); index++ {
+			if pending[index].floor >= pending[index].want {
+				continue
+			}
+			pending[index].floor++
+			remaining--
+			used++
+		}
+		break
+	}
+	return used
+}
+
+// burstFor 由速率推 burst。
+//   - 普通成员：1/8 秒配额（125ms 窗口）。整秒 burst 会造成 1s 突发 + 1s 静默的锯齿。
+//   - 有突发策略的成员：25ms 窗口（FR-078）。burst_cap 常常是基准的 5~6 倍，
+//     用 125ms 窗口会让它一次性倾泻近 2MB，整形就成了摆设。
+//
+// floor 到单次读缓冲，防小速率下过碎。
+func (s *NodeFairScheduler) burstFor(m *fairMember, bps uint64) int {
+	div := uint64(8)
+	if p := s.ClassPolicyFor(s.classNameFor(m)); p != nil && p.BurstCreditBytes > 0 && p.BurstCapBytePerSec > p.NormalCapBytePerSec {
+		div = 1000 / fairBurstShapingWindowMsec
+	}
+	b := int(bps / div)
+	if b < fairBurstFloorB {
+		b = fairBurstFloorB
+	}
+	return b
+}
+
+// setDirectionalLimit 同步更新双向速率与 burst。wrapper 侧每轮 WaitN
+// 动态读 Burst() 并对并发缩小重试，因此这里可以安全热更新。
+func (s *NodeFairScheduler) setDirectionalLimit(
+	m *fairMember,
+	uploadBps, downloadBps uint64,
+) {
+	m.upLimiter.SetLimit(rate.Limit(uploadBps))
+	m.upLimiter.SetBurst(s.burstFor(m, uploadBps))
+	m.downLimiter.SetLimit(rate.Limit(downloadBps))
+	m.downLimiter.SetBurst(s.burstFor(m, downloadBps))
+}
+
+// FairShareStatus 是调度器的运行态快照。它存在的唯一理由是回答运维在
+// 「为什么这台节点的分配看起来不太对」时会问的问题，尤其是注水截断——
+// 截断只表现为「分配有点不公平」，不暴露出来的话，没有任何线索指向它，
+// 运维会去查调度器逻辑，查半天查不出来。
+//
+// 日志里有、没人看，等于没有；每 tick 刷一行，也等于没有。所以截断走两条路：
+// 日志只在进入/退出时各记一行（外加每 5 分钟复述一次持续时长），
+// 而完整数字随时可以从这里读走。
+type FairShareStatus struct {
+	RootCapBytePerSec uint64 // 节点整形上限；0 = 节点级公平没开
+	Congested         bool   // 当前是否处于公平模式（不拥塞时根本不削速）
+	ActiveMembers     uint32 // 最近一 tick 的活跃成员数
+
+	// 以下四个回答运维关于注水截断的三个问题。
+	FillTruncated      bool   // 这一 tick 截断了吗
+	FillUnresolved     uint32 // 截断时还有多少成员没轮到（在 ActiveMembers 里的占比才是重点）
+	FillTruncatedTicks uint64 // 已经连续截断多少 tick（1 tick = 1 秒）；0 = 当前没截断
+	FillTruncatedTotal uint64 // 进程启动以来累计截断了多少 tick
+	// FillRounds 是最近一 tick **完成了几轮**注水（每轮钉住若干成员）。
+	// 0 = 第一轮就没人被钉住、直接按权重分完（同质成员的常态）；
+	// 等于 fairFillMaxRounds = 撞顶截断。两头都一眼可分。
+	FillRounds uint32
+}
+
+// Status 返回运行态快照。全走原子读，不抢 recompute 的锁——
+// 运维查状态不该有机会拖慢转发。
+func (s *NodeFairScheduler) Status() FairShareStatus {
+	st := FairShareStatus{
+		RootCapBytePerSec:  s.rootCapBytePerSec.Load(),
+		ActiveMembers:      s.activeMembers.Load(),
+		FillTruncated:      s.fillTruncated.Load(),
+		FillUnresolved:     s.fillUnresolved.Load(),
+		FillTruncatedTicks: s.fillTruncatedTicks.Load(),
+		FillTruncatedTotal: s.fillTruncatedTotal.Load(),
+		FillRounds:         s.fillRounds.Load(),
+	}
+	s.mu.Lock()
+	st.Congested = s.congested
+	s.mu.Unlock()
+	return st
+}
+
+// noteFill 记下这一 tick 注水的结果，并在**状态翻转时**记一行日志。
+//
+// 为什么不是每 tick 一行：5 万成员的节点一旦持续截断，那就是每秒一行、
+// 一天 86400 行，运维会把它当噪音过滤掉——那等于另一种「没人看」。
+// 为什么不是只在翻转时记：持续几小时的截断在日志里只有开头那一行，
+// 事后翻日志的人很容易错过。所以持续期间每 fairTruncationRestateTicks 复述一次，
+// 且带上「已经持续多久」。
+func (s *NodeFairScheduler) noteFill(truncated bool, rounds, unresolved, active int) {
+	s.fillRounds.Store(uint32(rounds))
+	s.activeMembers.Store(uint32(active))
+
+	if !truncated {
+		s.fillUnresolved.Store(0)
+		if s.fillTruncated.Swap(false) {
+			held := s.fillTruncatedTicks.Swap(0)
+			errors.LogInfo(context.Background(),
+				"node fair share: 注水不再截断，本次持续了 ", held, " 秒；",
+				"累计截断 ", s.fillTruncatedTotal.Load(), " 秒")
+		}
+		return
+	}
+
+	s.fillUnresolved.Store(uint32(unresolved))
+	s.fillTruncatedTotal.Add(1)
+	held := s.fillTruncatedTicks.Add(1)
+	first := !s.fillTruncated.Swap(true)
+
+	if first || held%fairTruncationRestateTicks == 0 {
+		errors.LogWarning(context.Background(),
+			"node fair share: 注水在 ", rounds, " 轮（上限 ", fairFillMaxRounds,
+			"）后截断，", unresolved, "/", active, " 个活跃成员没轮到、按权重一次分完；",
+			"已持续 ", held, " 秒。总额仍不超过 root_cap，但这批成员之间的公平性是近似的。")
+	}
+}

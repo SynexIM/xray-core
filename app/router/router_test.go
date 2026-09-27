@@ -2,6 +2,7 @@ package router_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -53,6 +54,59 @@ func TestSimpleRouter(t *testing.T) {
 	common.Must(err)
 	if tag := route.GetOutboundTag(); tag != "test" {
 		t.Error("expect tag 'test', bug actually ", tag)
+	}
+}
+
+func TestPickRouteConcurrentWithRuleReload(t *testing.T) {
+	initial := &Config{Rule: []*RoutingRule{tcpRule("initial")}}
+	r := new(Router)
+	common.Must(r.Init(context.Background(), initial, nil, nil, nil))
+
+	ctx := session.ContextWithOutbounds(context.Background(), []*session.Outbound{{
+		Target: net.TCPDestination(net.DomainAddress("example.com"), 80),
+	}})
+	routingCtx := routing_session.AsRoutingContext(ctx)
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 500 {
+				route, err := r.PickRoute(routingCtx)
+				if err == nil && route.GetOutboundTag() == "" {
+					t.Error("successful route has an empty outbound tag")
+					return
+				}
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := range 500 {
+			tag := "even"
+			if i%2 != 0 {
+				tag = "odd"
+			}
+			if err := r.ReloadRules(&Config{Rule: []*RoutingRule{tcpRule(tag)}}, false); err != nil {
+				t.Errorf("ReloadRules: %v", err)
+				return
+			}
+			if err := r.RemoveRule(tag); err != nil {
+				t.Errorf("RemoveRule: %v", err)
+				return
+			}
+		}
+	}()
+	wg.Wait()
+}
+
+func tcpRule(tag string) *RoutingRule {
+	return &RoutingRule{
+		TargetTag: &RoutingRule_Tag{Tag: tag},
+		RuleTag:   tag,
+		Networks:  []net.Network{net.Network_TCP},
 	}
 }
 

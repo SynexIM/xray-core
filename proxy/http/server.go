@@ -31,6 +31,7 @@ import (
 type Server struct {
 	config        *ServerConfig
 	policyManager policy.Manager
+	users         *UserStore
 }
 
 // NewServer creates a new HTTP inbound handler.
@@ -39,9 +40,56 @@ func NewServer(ctx context.Context, config *ServerConfig) (*Server, error) {
 	s := &Server{
 		config:        config,
 		policyManager: v.GetFeature(policy.ManagerType()).(policy.Manager),
+		users:         NewUserStore(config.UserLevel, config.Accounts, config.UserAccounts),
 	}
 
 	return s, nil
+}
+
+// SetUserStore makes this http server share an external user store. The mixed
+// (socks) inbound uses it so a user authenticates to the same *MemoryUser whether
+// they speak SOCKS5 or HTTP, keeping per-user limits and fair-share consistent.
+func (s *Server) SetUserStore(store *UserStore) {
+	if store != nil {
+		s.users = store
+	}
+}
+
+// Users exposes the server's user store so an embedding inbound (socks/mixed) can
+// share it.
+func (s *Server) Users() *UserStore {
+	return s.users
+}
+
+// AddUser implements proxy.UserManager.
+func (s *Server) AddUser(ctx context.Context, u *protocol.MemoryUser) error {
+	return s.users.Add(u)
+}
+
+// RemoveUser implements proxy.UserManager.
+func (s *Server) RemoveUser(ctx context.Context, email string) error {
+	s.users.Remove(email)
+	return nil
+}
+
+// UpdateUser implements proxy.UserUpdater.
+func (s *Server) UpdateUser(ctx context.Context, u *protocol.MemoryUser) error {
+	return s.users.Update(u)
+}
+
+// GetUser implements proxy.UserManager.
+func (s *Server) GetUser(ctx context.Context, email string) *protocol.MemoryUser {
+	return s.users.Get(email)
+}
+
+// GetUsers implements proxy.UserManager.
+func (s *Server) GetUsers(ctx context.Context) []*protocol.MemoryUser {
+	return s.users.GetAll()
+}
+
+// GetUsersCount implements proxy.UserManager.
+func (s *Server) GetUsersCount(context.Context) int64 {
+	return int64(len(s.users.GetAll()))
 }
 
 func (s *Server) policy() policy.Session {
@@ -122,13 +170,19 @@ Start:
 		return trace
 	}
 
-	if len(s.config.Accounts) > 0 {
+	if !s.users.Empty() {
 		user, pass, ok := parseBasicAuth(request.Header.Get("Proxy-Authorization"))
-		if !ok || !s.config.HasAccount(user, pass) {
+		var memUser *protocol.MemoryUser
+		if ok {
+			memUser, ok = s.users.Authenticate(user, pass)
+		}
+		if !ok {
 			return common.Error2(conn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"proxy\"\r\n\r\n")))
 		}
-		if inbound != nil {
-			inbound.User.Email = user
+		if inbound != nil && memUser != nil {
+			// Reuse the shared per-user instance so the dispatcher enforces this
+			// user's bandwidth/connection limits across all of their connections.
+			inbound.User = memUser
 		}
 	}
 

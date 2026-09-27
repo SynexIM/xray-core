@@ -11,8 +11,19 @@ import (
 )
 
 type SocksAccount struct {
-	Username string `json:"user"`
-	Password string `json:"pass"`
+	Username     string `json:"user"`
+	Password     string `json:"pass"`
+	BandwidthBps uint64 `json:"bandwidth_bps"`
+	ConnLimit    uint32 `json:"conn_limit"`
+	// 双速率（可选）。committed_bps 是承诺速率 CIR，committed_burst_bytes 是
+	// 突发额度 CBS（字节，留空 = 一天的承诺量）。语义见 protocol.User。
+	CommittedBps        uint64 `json:"committed_bps"`
+	CommittedBurstBytes uint64 `json:"committed_burst_bytes"`
+	// class 标识共享同一争抢策略的客户组，策略表走 fairshare 的 SetClassPolicy 下发。
+	Class string `json:"class"`
+	// Email 是逻辑客户身份；缺省等于 user，与其他入站共享限速与统计时必须填。
+	Email string `json:"email"`
+	UserRuntimeFields
 }
 
 func (v *SocksAccount) Build() *socks.Account {
@@ -51,11 +62,23 @@ func (v *SocksServerConfig) Build() (proto.Message, error) {
 	if v.Accounts != nil {
 		v.Users = v.Accounts
 	}
-	// TODO: PB
+	// Build per-user accounts carrying protocol-agnostic limits (bandwidth +
+	// connection caps), so a mixed/socks inbound enforces them for users baked in
+	// at boot. The legacy `accounts` map (no limits) is left empty to avoid
+	// double-registering the same usernames in the runtime user store.
 	if len(v.Users) > 0 {
-		config.Accounts = make(map[string]string, len(v.Users))
+		config.UserAccounts = make([]*socks.UserAccount, 0, len(v.Users))
 		for _, account := range v.Users {
-			config.Accounts[account.Username] = account.Password
+			config.UserAccounts = append(config.UserAccounts, &socks.UserAccount{
+				Username:            account.Username,
+				Password:            account.Password,
+				BandwidthBps:        account.BandwidthBps,
+				ConnLimit:           account.ConnLimit,
+				CommittedBps:        account.CommittedBps,
+				CommittedBurstBytes: account.CommittedBurstBytes,
+				Class:               account.Class,
+				Runtime:             account.runtimeUser(),
+			})
 		}
 	}
 
@@ -135,4 +158,22 @@ func (v *SocksClientConfig) Build() (proto.Message, error) {
 		break
 	}
 	return config, nil
+}
+
+func (v *SocksAccount) runtimeUser() *protocol.User {
+	if v.Email == "" && v.UserRuntimeFields == (UserRuntimeFields{}) {
+		return nil
+	}
+	email := v.Email
+	if email == "" {
+		email = v.Username
+	}
+	return v.applyTo(&protocol.User{
+		Email:               email,
+		BandwidthBps:        v.BandwidthBps,
+		ConnLimit:           v.ConnLimit,
+		CommittedBps:        v.CommittedBps,
+		CommittedBurstBytes: v.CommittedBurstBytes,
+		Class:               v.Class,
+	})
 }

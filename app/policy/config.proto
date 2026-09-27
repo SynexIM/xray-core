@@ -23,6 +23,9 @@ message Policy {
     bool user_uplink = 1;
     bool user_downlink = 2;
     bool user_online = 3;
+    // Enable per-(user,destination-site) traffic counters. Off by default
+    // because per-domain cardinality is unbounded; opt-in for site aggregation.
+    bool user_site = 4;
   }
 
   message Buffer {

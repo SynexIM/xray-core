@@ -18,6 +18,30 @@ message RemoveUserOperation {
   string email = 1;
 }
 
+// AddUsersOperation / RemoveUsersOperation 是一批客户一次装卸。
+//
+// 光有 BatchAlterInbound 不够：它只是把 N 个 RPC 合成一个 RPC，落到 inbound 上
+// 仍然是 N 次单客户操作。SS2022 每次单客户操作都要整份重建 EIH 表，
+// 5 万实例下这就是 N 次全表派生。这两个 op 让 inbound 真的只动一次表。
+//
+// 整批原子：里面有一个坏的（email 撞车、要删的不存在）就整批不生效。
+message AddUsersOperation {
+  repeated xray.common.protocol.User users = 1;
+}
+
+message RemoveUsersOperation {
+  repeated string emails = 1;
+}
+
+// UpdateUserOperation updates an existing user in place, keyed by email. It is
+// used to mutate per-user runtime limits (bandwidth_bps / conn_limit) and the
+// protocol account/credential without the remove+add churn that drops live
+// connections. Inbounds whose UserManager implements UpdateUser apply it
+// atomically; the email is the identity and must already exist.
+message UpdateUserOperation {
+  xray.common.protocol.User user = 1;
+}
+
 message AddInboundRequest {
   core.InboundHandlerConfig inbound = 1;
 }
@@ -30,12 +54,45 @@ message RemoveInboundRequest {
 
 message RemoveInboundResponse {}
 
+message DrainInboundRequest {
+  string tag = 1;
+}
+
+message DrainInboundResponse {}
+
+message ResumeInboundRequest {
+  string tag = 1;
+}
+
+message ResumeInboundResponse {}
+
 message AlterInboundRequest {
   string tag = 1;
   xray.common.serial.TypedMessage operation = 2;
 }
 
 message AlterInboundResponse {}
+
+// BatchAlterInbound applies many AlterInbound operations against one inbound
+// tag over a single gRPC call, so client provisioning churn scales with node
+// requests instead of per-client round trips. Operations are applied in order;
+// per-operation failures are reported in the response rather than aborting the
+// whole batch, so the caller can retry only the failed slots.
+message BatchAlterInboundRequest {
+  string tag = 1;
+  repeated xray.common.serial.TypedMessage operations = 2;
+}
+
+message BatchAlterInboundOperationResult {
+  // index is the position of the operation in the request operations list.
+  uint32 index = 1;
+  bool success = 2;
+  string error = 3;
+}
+
+message BatchAlterInboundResponse {
+  repeated BatchAlterInboundOperationResult results = 1;
+}
 
 message ListInboundsRequest {
   bool isOnlyTags = 1;
@@ -83,12 +140,28 @@ message ListOutboundsResponse {
   repeated core.OutboundHandlerConfig outbounds = 1;
 }
 
+// SetOutboundRateLimitOperation changes the aggregate payload rate shared by
+// every connection using one outbound. Zero disables the cap. The operation
+// mutates the live limiter in place so established connections keep running
+// and observe the new rate.
+message SetOutboundRateLimitOperation {
+  uint64 rate_limit_bit_per_sec = 1;
+}
+
 service HandlerService {
   rpc AddInbound(AddInboundRequest) returns (AddInboundResponse) {}
 
   rpc RemoveInbound(RemoveInboundRequest) returns (RemoveInboundResponse) {}
 
+  // DrainInbound closes only the listening socket. Established TCP sessions
+  // keep their handler/proxy state until the old process exits after a drain TTL.
+  rpc DrainInbound(DrainInboundRequest) returns (DrainInboundResponse) {}
+
+  rpc ResumeInbound(ResumeInboundRequest) returns (ResumeInboundResponse) {}
+
   rpc AlterInbound(AlterInboundRequest) returns (AlterInboundResponse) {}
+
+  rpc BatchAlterInbound(BatchAlterInboundRequest) returns (BatchAlterInboundResponse) {}
 
   rpc ListInbounds(ListInboundsRequest) returns (ListInboundsResponse) {}
 

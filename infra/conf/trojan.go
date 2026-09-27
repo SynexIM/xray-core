@@ -108,6 +108,17 @@ type TrojanUserConfig struct {
 	Level    byte   `json:"level"`
 	Email    string `json:"email"`
 	Flow     string `json:"flow"`
+	// 每用户限速。留空 = 不限。单位 bit/s，与 protocol.User 的顶层字段同名，
+	// 所以所有协议的配置写法完全一致。
+	BandwidthBps uint64 `json:"bandwidth_bps"`
+	ConnLimit    uint32 `json:"conn_limit"`
+	// 双速率（可选）。committed_bps 是承诺速率 CIR，committed_burst_bytes 是
+	// 突发额度 CBS（字节，留空 = 一天的承诺量）。语义见 protocol.User。
+	CommittedBps        uint64 `json:"committed_bps"`
+	CommittedBurstBytes uint64 `json:"committed_burst_bytes"`
+	// class 标识共享同一争抢策略的客户组，策略表走 fairshare 的 SetClassPolicy 下发。
+	Class string `json:"class"`
+	UserRuntimeFields
 }
 
 // TrojanServerConfig is Inbound configuration
@@ -135,13 +146,18 @@ func (c *TrojanServerConfig) Build() (proto.Message, error) {
 			return errors.PrintRemovedFeatureError(`Flow for Trojan`, ``)
 		}
 
-		config.Users[idx] = &protocol.User{
+		config.Users[idx] = rawUser.applyTo(&protocol.User{
 			Level: uint32(rawUser.Level),
 			Email: rawUser.Email,
 			Account: serial.ToTypedMessage(&trojan.Account{
 				Password: rawUser.Password,
 			}),
-		}
+			BandwidthBps:        rawUser.BandwidthBps,
+			ConnLimit:           rawUser.ConnLimit,
+			CommittedBps:        rawUser.CommittedBps,
+			CommittedBurstBytes: rawUser.CommittedBurstBytes,
+			Class:               rawUser.Class,
+		})
 		return nil
 	}
 	if err := task.ParallelForN(len(c.Users), processClient); err != nil {

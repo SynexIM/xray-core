@@ -16,6 +16,14 @@ type Rule struct {
 	Balancer  *Balancer
 	Condition Condition
 	Webhook   *WebhookNotifier
+	// UserEmail and InboundTag keep the rule's own matching conditions readable
+	// after BuildCondition() has folded them into an opaque Condition.
+	//
+	// ListRule() needs them: a rule listing describes *the rule*, and the only
+	// other place these values existed at runtime was inside a closure no caller
+	// can look into.
+	UserEmail  []string
+	InboundTag []string
 }
 
 func (r *Rule) GetTag() (string, error) {

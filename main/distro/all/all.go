@@ -14,6 +14,12 @@ import (
 	_ "github.com/xtls/xray-core/app/proxyman/command"
 	_ "github.com/xtls/xray-core/app/stats/command"
 
+	// ipipx 魔改：访问聚合（#1）与节点级公平限速（#2）的 command 服务 + 聚合 app。
+	_ "github.com/xtls/xray-core/app/accesslog"
+	_ "github.com/xtls/xray-core/app/accesslog/command"
+	_ "github.com/xtls/xray-core/app/fairshare/command"
+	_ "github.com/xtls/xray-core/app/reverse/command"
+
 	// Developer preview services
 	_ "github.com/xtls/xray-core/app/observatory/command"
 

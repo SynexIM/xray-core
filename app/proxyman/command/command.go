@@ -7,6 +7,7 @@ import (
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/protocol"
+	"github.com/xtls/xray-core/common/serial"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/inbound"
 	"github.com/xtls/xray-core/features/outbound"
@@ -24,6 +25,10 @@ type InboundOperation interface {
 type OutboundOperation interface {
 	// ApplyOutbound applies this operation to the given outbound handler.
 	ApplyOutbound(context.Context, outbound.Handler) error
+}
+
+type outboundRateLimitSetter interface {
+	SetOutboundRateLimitBitPerSec(uint64) error
 }
 
 func getInbound(handler inbound.Handler) (proxy.Inbound, error) {
@@ -48,7 +53,11 @@ func (op *AddUserOperation) ApplyInbound(ctx context.Context, handler inbound.Ha
 	if err != nil {
 		return errors.New("failed to parse user").Base(err)
 	}
-	return um.AddUser(ctx, mUser)
+	if err := um.AddUser(ctx, mUser); err != nil {
+		return err
+	}
+	protocol.ApplyTierPolicy(mUser)
+	return nil
 }
 
 // ApplyInbound implements InboundOperation.
@@ -61,7 +70,131 @@ func (op *RemoveUserOperation) ApplyInbound(ctx context.Context, handler inbound
 	if !ok {
 		return errors.New("proxy is not a UserManager")
 	}
-	return um.RemoveUser(ctx, op.Email)
+	return removeUsers(ctx, um, []string{op.Email})
+}
+
+// ApplyInbound implements InboundOperation. 一批客户一次装表。
+func (op *AddUsersOperation) ApplyInbound(ctx context.Context, handler inbound.Handler) error {
+	p, err := getInbound(handler)
+	if err != nil {
+		return err
+	}
+	um, ok := p.(proxy.UserManager)
+	if !ok {
+		return errors.New("proxy is not a UserManager")
+	}
+	users := make([]*protocol.MemoryUser, 0, len(op.Users))
+	for _, u := range op.Users {
+		mUser, err := u.ToMemoryUser()
+		if err != nil {
+			return errors.New("failed to parse user").Base(err)
+		}
+		users = append(users, mUser)
+	}
+	if err := applyAddUsers(ctx, um, users); err != nil {
+		return err
+	}
+	for _, u := range users {
+		protocol.ApplyTierPolicy(u)
+	}
+	return nil
+}
+
+// applyAddUsers 有批量能力就一次装表，没有就退回逐个走法
+// （那些 proxy 的增删本来就是 O(1)，批量对它们没有额外好处）。
+func applyAddUsers(ctx context.Context, um proxy.UserManager, users []*protocol.MemoryUser) error {
+	if bm, ok := um.(proxy.BatchUserManager); ok {
+		return bm.AddUsers(ctx, users)
+	}
+	for _, u := range users {
+		if err := um.AddUser(ctx, u); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ApplyInbound implements InboundOperation. 一批客户一次卸表。
+func (op *RemoveUsersOperation) ApplyInbound(ctx context.Context, handler inbound.Handler) error {
+	p, err := getInbound(handler)
+	if err != nil {
+		return err
+	}
+	um, ok := p.(proxy.UserManager)
+	if !ok {
+		return errors.New("proxy is not a UserManager")
+	}
+	return removeUsers(ctx, um, op.Emails)
+}
+
+// removeUsers 卸载用户，并把他们在进程里留下的运行态一并清掉。
+//
+// 为什么清理要放在这里：per-user 限速桶挂在全局 runtimeLimiters（sync.Map，键是
+// *MemoryUser 指针）上，连接计数同理。用户从 validator 里被删掉之后，那两张表
+// 仍然攥着他的指针——既回收不了内存，也让这个用户永远活在进程里。
+// 5 万实例的月度换手会稳定地攒出几万个这样的僵尸条目。
+//
+// 各协议的 RemoveUser 只收 email，拿不到 *MemoryUser，所以清理只能在**知道
+// 用户是谁**的这一层做：先查后删再清。放在这里还有一个好处——五个协议共用
+// 一份逻辑，不会有哪个协议漏掉。
+func removeUsers(ctx context.Context, um proxy.UserManager, emails []string) error {
+	stale := make([]*protocol.MemoryUser, 0, len(emails))
+	for _, email := range emails {
+		if u := um.GetUser(ctx, email); u != nil {
+			stale = append(stale, u)
+		}
+	}
+
+	if bm, ok := um.(proxy.BatchUserManager); ok {
+		if err := bm.RemoveUsers(ctx, emails); err != nil {
+			return err
+		}
+	} else {
+		for _, email := range emails {
+			if err := um.RemoveUser(ctx, email); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, u := range stale {
+		u.ResetRuntimeLimiter()
+		u.ResetRuntimeConnections()
+	}
+	return nil
+}
+
+// ApplyInbound implements InboundOperation. It updates an existing user in place
+// (credentials + per-user limits) without dropping live connections. The inbound
+// proxy must implement proxy.UserUpdater; if it does not, the operation fails
+// explicitly rather than silently falling back to remove+add.
+func (op *UpdateUserOperation) ApplyInbound(ctx context.Context, handler inbound.Handler) error {
+	p, err := getInbound(handler)
+	if err != nil {
+		return err
+	}
+	uu, ok := p.(proxy.UserUpdater)
+	if !ok {
+		return errors.New("proxy does not support UpdateUser")
+	}
+	mUser, err := op.User.ToMemoryUser()
+	if err != nil {
+		return errors.New("failed to parse user").Base(err)
+	}
+	if err := uu.UpdateUser(ctx, mUser); err != nil {
+		return err
+	}
+	protocol.ApplyTierPolicy(mUser)
+	return nil
+}
+
+// ApplyOutbound changes one outbound's shared runtime limiter in place.
+func (op *SetOutboundRateLimitOperation) ApplyOutbound(_ context.Context, handler outbound.Handler) error {
+	setter, ok := handler.(outboundRateLimitSetter)
+	if !ok {
+		return errors.New("outbound does not support aggregate rate limiting")
+	}
+	return setter.SetOutboundRateLimitBitPerSec(op.RateLimitBitPerSec)
 }
 
 type handlerServer struct {
@@ -82,22 +215,75 @@ func (s *handlerServer) RemoveInbound(ctx context.Context, request *RemoveInboun
 	return &RemoveInboundResponse{}, s.ihm.RemoveHandler(ctx, request.Tag)
 }
 
-func (s *handlerServer) AlterInbound(ctx context.Context, request *AlterInboundRequest) (*AlterInboundResponse, error) {
-	rawOperation, err := request.Operation.GetInstance()
-	if err != nil {
-		return nil, errors.New("unknown operation").Base(err)
-	}
-	operation, ok := rawOperation.(InboundOperation)
+func (s *handlerServer) DrainInbound(ctx context.Context, request *DrainInboundRequest) (*DrainInboundResponse, error) {
+	drainer, ok := s.ihm.(interface {
+		DrainHandler(context.Context, string) error
+	})
 	if !ok {
-		return nil, errors.New("not an inbound operation")
+		return nil, errors.New("inbound manager does not support listener drain")
 	}
+	return &DrainInboundResponse{}, drainer.DrainHandler(ctx, request.Tag)
+}
 
+func (s *handlerServer) ResumeInbound(ctx context.Context, request *ResumeInboundRequest) (*ResumeInboundResponse, error) {
+	resumer, ok := s.ihm.(interface {
+		ResumeHandler(context.Context, string) error
+	})
+	if !ok {
+		return nil, errors.New("inbound manager does not support listener resume")
+	}
+	return &ResumeInboundResponse{}, resumer.ResumeHandler(ctx, request.Tag)
+}
+
+func (s *handlerServer) AlterInbound(ctx context.Context, request *AlterInboundRequest) (*AlterInboundResponse, error) {
 	handler, err := s.ihm.GetHandler(ctx, request.Tag)
 	if err != nil {
 		return nil, errors.New("failed to get handler: ", request.Tag).Base(err)
 	}
 
-	return &AlterInboundResponse{}, operation.ApplyInbound(ctx, handler)
+	return &AlterInboundResponse{}, applyInboundOperation(ctx, request.Operation, handler)
+}
+
+// BatchAlterInbound applies many operations against one inbound tag over a single
+// gRPC call. The handler is resolved once; each operation is applied in order and
+// per-operation failures are reported in the response (not aborting the batch),
+// so the caller can retry only the failed slots. This keeps provisioning churn
+// scaling with node requests instead of one round trip per client.
+func (s *handlerServer) BatchAlterInbound(ctx context.Context, request *BatchAlterInboundRequest) (*BatchAlterInboundResponse, error) {
+	handler, err := s.ihm.GetHandler(ctx, request.Tag)
+	if err != nil {
+		return nil, errors.New("failed to get handler: ", request.Tag).Base(err)
+	}
+
+	response := &BatchAlterInboundResponse{
+		Results: make([]*BatchAlterInboundOperationResult, 0, len(request.Operations)),
+	}
+	for i, rawMessage := range request.Operations {
+		result := &BatchAlterInboundOperationResult{Index: uint32(i)}
+		if applyErr := applyInboundOperation(ctx, rawMessage, handler); applyErr != nil {
+			result.Success = false
+			result.Error = applyErr.Error()
+		} else {
+			result.Success = true
+		}
+		response.Results = append(response.Results, result)
+	}
+	return response, nil
+}
+
+func applyInboundOperation(ctx context.Context, rawMessage *serial.TypedMessage, handler inbound.Handler) error {
+	if rawMessage == nil {
+		return errors.New("nil operation")
+	}
+	rawOperation, err := rawMessage.GetInstance()
+	if err != nil {
+		return errors.New("unknown operation").Base(err)
+	}
+	operation, ok := rawOperation.(InboundOperation)
+	if !ok {
+		return errors.New("not an inbound operation")
+	}
+	return operation.ApplyInbound(ctx, handler)
 }
 
 func (s *handlerServer) ListInbounds(ctx context.Context, request *ListInboundsRequest) (*ListInboundsResponse, error) {
@@ -174,6 +360,9 @@ func (s *handlerServer) RemoveOutbound(ctx context.Context, request *RemoveOutbo
 }
 
 func (s *handlerServer) AlterOutbound(ctx context.Context, request *AlterOutboundRequest) (*AlterOutboundResponse, error) {
+	if request.Operation == nil {
+		return nil, errors.New("nil operation")
+	}
 	rawOperation, err := request.Operation.GetInstance()
 	if err != nil {
 		return nil, errors.New("unknown operation").Base(err)
@@ -184,6 +373,9 @@ func (s *handlerServer) AlterOutbound(ctx context.Context, request *AlterOutboun
 	}
 
 	handler := s.ohm.GetHandler(request.Tag)
+	if handler == nil {
+		return nil, errors.New("failed to get handler: ", request.Tag)
+	}
 	return &AlterOutboundResponse{}, operation.ApplyOutbound(ctx, handler)
 }
 
