@@ -176,7 +176,8 @@ link 层是真推字节量速率的：突发段应在 PIR 附近，CBS 烧干后
   每层整层给得起才发；剩余按 weight 先注给正常池（目标到标准），再注给重度池。谁也没被压住就全部放回标准。
 - **重度池**：class 的 `heavy_window_seconds` 内平均用量 ≥ 标准 × `heavy_percent`%。窗口前的时间按零算，
   刚跑满的人不会立刻被当成重度。任一为 0 = 不识别。
-- **时延**：25ms 量子 + 按连接 SFQ + 新连接首包不等，拥挤时也一样（份额只改速率，不改排队方式）。
+- **时延**：稀疏流优先——连接近期用量低于池内公平份额即不排队（池令牌可欠账 25ms 速率，由满载连接还）；满载连接按 5ms 片 SFQ 轮转；公平按内层流（mux/XUDP/HY2 每条流各一份）。拥挤时也一样（份额只改速率）；未排队的池份额抬到同层水位。门禁：`common/protocol/tier_latency_test.go`（小包 p50 ≤ 1ms、p99 ≤ 3ms）。
+- **限速包装**：`buf.RateLimitReader/Writer` 把 Interrupt/Close/ReturnAnError/Recover 交给里面的管道，mux/XUDP 会话照常关闭。
 - 所有参数 0 = 没有这一项；class 表里没有的名字 = 不加权、无地板。内核里没有业务名字，也没有默认值。
 
 测试：`common/protocol/pool_shaping_test.go`（不挤时突发→标准且永不降持续、pool 显式共享、拥挤时权重/地板/重度）。
