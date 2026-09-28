@@ -33,7 +33,7 @@ proxy/http/users.go         给 http 协议补上客户端（email）管理
 | `common/protocol/user.proto` | 顶层限速、连接数、`committed_bps` / `committed_burst_bytes`、`class`；另收敛 Nodus/IPNex 的方向限速字段与 `egress_tag`（字段 9–15） |
 | `common/protocol/user.go` | `ToMemoryUser` / `ToProtoUser` 保留全部运行态字段并容忍无 account 的用户 |
 | `common/protocol/user_limits.go` | 单一 per-user shaping seam：无方向字段仍走现有共享 PIR/CIR/CBS；有字段时上传/下载桶隔离 |
-| `app/dispatcher/default.go` | 限速挂到 link；连接数上限与 active gauges；用户固定出口；按站点计流量 |
+| `app/dispatcher/default.go` | 限速挂到 link；连接数上限与 active gauges；用户固定出口（ruleTag 以 `guard:` 开头的节点安全规则优先于固定出口，其余路由规则不改变出口）；按站点计流量 |
 | `app/proxyman/outbound/outbound.go` | `Select` 在读锁内读 tagsCache（上游并发增删出站时的数据竞争） |
 | `app/proxyman/config.proto` | `SenderConfig.rate_limit_bit_per_sec`，每出站上下行合计共享的总速率 |
 | `app/proxyman/command/*` | `DrainInbound` `ResumeInbound` `BatchAlterInbound`；`AddUsersOperation` `RemoveUsersOperation`；卸载时清运行态；`SetOutboundRateLimitOperation` 热改出站总速率 |

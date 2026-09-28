@@ -619,6 +619,18 @@ func sniffer(ctx context.Context, cReader *cachedReader, metadataOnly bool, netw
 	return contentResult, contentErr
 }
 
+// guardOutbound 只看以 "guard:" 开头的路由规则（节点默认安全规则），命中返回其出站 tag，否则为空。
+func (d *DefaultDispatcher) guardOutbound(routingLink routing.Context) string {
+	if d.router == nil {
+		return ""
+	}
+	route, err := d.router.PickRoute(routingLink)
+	if err != nil || !strings.HasPrefix(route.GetRuleTag(), "guard:") {
+		return ""
+	}
+	return route.GetOutboundTag()
+}
+
 // userEgressTag returns the authenticated user's dedicated outbound, or empty
 // when routing must proceed normally.
 func userEgressTag(ctx context.Context) string {
@@ -651,7 +663,18 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 			return
 		}
 	} else if egressTag := userEgressTag(ctx); egressTag != "" {
-		if h := d.ohm.GetHandler(egressTag); h != nil {
+		if guardTag := d.guardOutbound(routingLink); guardTag != "" {
+			// 节点默认安全规则（ruleTag 以 guard: 开头，如拦 BT、SMTP 25、内网与云元数据）优先于固定出口：
+			// 否则有专属出口的用户完全绕过路由，安全规则形同虚设。
+			if h := d.ohm.GetHandler(guardTag); h != nil {
+				isPickRoute = 2
+				errors.LogInfo(ctx, "guard rule overrides dedicated egress, taking [", guardTag, "] for [", destination, "]")
+				handler = h
+			}
+		}
+		if handler != nil {
+			// 已被安全规则接管
+		} else if h := d.ohm.GetHandler(egressTag); h != nil {
 			isPickRoute = 1
 			errors.LogInfo(ctx, "taking dedicated egress [", egressTag, "] for [", destination, "]")
 			handler = h
