@@ -8,6 +8,18 @@ fork 改动集中在通用限速和运行时管理。本文记录当前差异；
 
 `protocol.User` 和 `MemoryUser` 回到 `{level,email,account}`，proto 旧字段 4–21 的号码与名字 reserved。删除旧 User 限速、pool/class、固定出口、每出站共享限速操作和 `app/fairshare`。出口选择由路由负责；出口上限由匹配 outboundTag 的限速规则负责。
 
+## 管理服务（2026-10-10）
+
+- `app/policy/command/`：PolicyService.SetLevels 整份替换 levels，GetLevels 返回有效值的独立副本；manager 用 atomic 指针发布不可变快照，新连接读新策略，已建连接保持原 Session。CLI：`xray api policy set|get`，set 接受含 `levels` 的 policy JSON 对象。
+- `app/capability/`：模块自行 Register 能力，并发安全、去重、排序；CapabilityService.Get 与 `xray api capability` 返回版本和能力。构建发布版加 `-ldflags '-X github.com/xtls/xray-core/app/capability.Release=synexim.1'`，得到 `26.10.10-synexim.1`；不注入时只返回 core.Version()。本路登记 `policy.hotReload`、`api.batch`、`inbound.drain`，`limit` 由限速模块登记。
+- `main/commands/base/execute.go`：命令后单独的 `--help` / `-h` 复用已有 Help 路径并成功退出，让分组命令与 CustomFlags 命令的帮助检查可用；不传帮助参数时保持原执行路径。
+
+## 安全与部署
+
+SOCKS BIND：v26.10.10 上游已在 `proxy/socks/protocol.go` 拒绝 CMD=2，回复 RFC 1928 0x07；保留握手层实现，不加配置开关。`proxy/socks/bind_test.go` 覆盖认证/无认证、UDP 开关组合、0.0.0.0:0 占位，观察系统监听器确认没有开端口；UDP ASSOCIATE 不改。
+
+部署示例：`deploy/examples/node-line.json` 的四协议 TCP 入站默认 `acceptProxyProtocol: true`，前面有中转必须开并要求中转发送 PROXY protocol；限制中转源地址，UDP 不经 PROXY protocol。`node-ip.json` 每 IP 一组 Mixed → freedom，明确 `sendThrough` 与 `ForceIPv4`。两例 API 只监听 `/run/xray/api.sock`，Compose host 网络的 xray/agent 共享 `/run/xray`，agent 镜像由下一个 change 提供。配置凭据均为占位，REALITY 私钥需运行 `xray x25519` 后填入；LimitService 等限速分支合并，示例暂不含 limit 段。
+
 ### 配置与执行器
 
 | 路径 | 当前职责 |

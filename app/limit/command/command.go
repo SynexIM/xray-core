@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/xtls/xray-core/app/capability"
 	"github.com/xtls/xray-core/app/limit"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/core"
@@ -109,6 +110,7 @@ func (s *service) Register(server *grpc.Server) {
 	}, false))
 }
 func init() {
+	capability.Register("limit")
 	common.Must(common.RegisterConfig((*Config)(nil), func(ctx context.Context, _ interface{}) (interface{}, error) {
 		return &service{v: core.MustFromContext(ctx)}, nil
 	}))

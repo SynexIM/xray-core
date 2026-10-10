@@ -6,9 +6,8 @@ import (
 	"github.com/xtls/xray-core/infra/conf"
 )
 
-// api 的 services 是一串字符串对照表。写错一个字母不会报错：
-// 服务只是没注册，API 调用方收到 "unimplemented"，而配置看起来完全正常。
-// 所以把每个名字都过一遍，确认它真的映射出了一个服务。
+// api 的 services 是一串字符串对照表。每个名字都要真的映射出一个服务；
+// 写错的名字必须报错，不能静默忽略（否则调用方以为开了，节点上其实没有）。
 func TestAPIServiceNames(t *testing.T) {
 	names := []string{
 		"reflectionservice",
@@ -20,6 +19,8 @@ func TestAPIServiceNames(t *testing.T) {
 		"routingservice",
 		"accesslogservice",
 		"reverseservice",
+		"policyservice",
+		"capabilityservice",
 	}
 
 	for _, name := range names {
@@ -38,13 +39,9 @@ func TestAPIServiceNames(t *testing.T) {
 		})
 	}
 
-	// 反面：不认识的名字要被丢掉，不能凭空冒出一个服务。
+	// 反面：不认识的名字直接报错。
 	cfg := &conf.APIConfig{Tag: "api", Services: []string{"nosuchservice"}}
-	built, err := cfg.Build()
-	if err != nil {
-		t.Fatalf("Build 失败：%v", err)
-	}
-	if len(built.Service) != 0 {
-		t.Errorf("不认识的服务名却建出了 %d 个服务", len(built.Service))
+	if _, err := cfg.Build(); err == nil {
+		t.Fatal("不认识的服务名没有报错")
 	}
 }

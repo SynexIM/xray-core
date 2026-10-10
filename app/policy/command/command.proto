@@ -1,0 +1,14 @@
+syntax = "proto3";
+package xray.app.policy.command;
+option go_package = "github.com/xtls/xray-core/app/policy/command";
+import "app/policy/config.proto";
+message SetLevelsRequest { map<uint32, xray.app.policy.Policy> levels = 1; }
+message SetLevelsResponse {}
+message GetLevelsRequest {}
+message GetLevelsResponse { map<uint32, xray.app.policy.Policy> levels = 1; }
+service PolicyService {
+  // Replaces all levels; existing connections retain their session policy.
+  rpc SetLevels(SetLevelsRequest) returns (SetLevelsResponse);
+  rpc GetLevels(GetLevelsRequest) returns (GetLevelsResponse);
+}
+message Config {}
