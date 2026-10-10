@@ -16,6 +16,8 @@ fork 改动集中在通用限速和运行时管理。本文记录当前差异；
 
 ## 安全与部署
 
+`infra/conf.DecodeStrict` / `DecodeStrictValue` 供控制面准入检查未知字段并返回路径；协议 config 自行声明 RawMessage 账户形状，路由严格校验复用原生 `rawFieldRule`，不改变命令行宽松解析。
+
 SOCKS BIND：v26.10.10 上游已在 `proxy/socks/protocol.go` 拒绝 CMD=2，回复 RFC 1928 0x07；保留握手层实现，不加配置开关。`proxy/socks/bind_test.go` 覆盖认证/无认证、UDP 开关组合、0.0.0.0:0 占位，观察系统监听器确认没有开端口；UDP ASSOCIATE 不改。
 
 部署示例：`deploy/examples/node-line.json` 的四协议 TCP 入站默认 `acceptProxyProtocol: true`，前面有中转必须开并要求中转发送 PROXY protocol；限制中转源地址，UDP 不经 PROXY protocol。`node-ip.json` 每 IP 一组 Mixed → freedom，明确 `sendThrough` 与 `ForceIPv4`。两例 API 只监听 `/run/xray/api.sock`，Compose host 网络的 xray/agent 共享 `/run/xray`，agent 镜像由下一个 change 提供。配置凭据均为占位，REALITY 私钥需运行 `xray x25519` 后填入；LimitService 等限速分支合并，示例暂不含 limit 段。

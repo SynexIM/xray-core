@@ -7,8 +7,6 @@ import (
 	"io"
 	"reflect"
 	"strings"
-
-	"github.com/xtls/xray-core/proxy/vless"
 )
 
 // DecodeStrict 只供控制面准入使用，保留命令行现有的宽松解析行为。
@@ -29,7 +27,7 @@ func DecodeStrict(data []byte) (*Config, error) {
 	}
 	if c.RouterConfig != nil {
 		for i, rule := range c.RouterConfig.RuleList {
-			if err := strictShape(rule, reflect.TypeFor[strictRoutingRule](), fmt.Sprintf("$.routing.rules[%d]", i)); err != nil {
+			if err := strictShape(rule, reflect.TypeFor[rawFieldRule](), fmt.Sprintf("$.routing.rules[%d]", i)); err != nil {
 				return nil, err
 			}
 		}
@@ -160,13 +158,12 @@ func strictSettings(raw *json.RawMessage, protocol string, loader *JSONConfigLoa
 		return fmt.Errorf("%s: %w", path, err)
 	}
 	// VLESS/VMess 的账户经过 RawMessage 二次解码，必须显式检查合并后的 User 外形。
-	accountTypes := map[string]reflect.Type{"vless": reflect.TypeFor[vless.Account](), "vmess": reflect.TypeFor[VMessAccount](), "socks": reflect.TypeFor[SocksAccount](), "http": reflect.TypeFor[HTTPAccount]()}
-	accountType, ok := accountTypes[strings.ToLower(protocol)]
+	declaration, ok := target.(strictAccountConfig)
 	if !ok {
 		return nil
 	}
 	fields := map[string]reflect.Type{"email": reflect.TypeFor[string](), "level": reflect.TypeFor[uint32]()}
-	jsonFields(accountType, fields)
+	jsonFields(declaration.strictAccountType(), fields)
 	return strictAccounts(*raw, fields, path)
 }
 
@@ -211,25 +208,7 @@ func strictAccounts(data []byte, fields map[string]reflect.Type, path string) er
 	return nil
 }
 
-type strictRoutingRule struct {
-	RouterRule
-	Type       string             `json:"type"`
-	Domain     *StringList        `json:"domain"`
-	Domains    *StringList        `json:"domains"`
-	IP         *StringList        `json:"ip"`
-	Port       *PortList          `json:"port"`
-	Network    *NetworkList       `json:"network"`
-	SourceIP   *StringList        `json:"sourceIP"`
-	Source     *StringList        `json:"source"`
-	SourcePort *PortList          `json:"sourcePort"`
-	User       *StringList        `json:"user"`
-	VlessRoute *PortList          `json:"vlessRoute"`
-	InboundTag *StringList        `json:"inboundTag"`
-	Protocols  *StringList        `json:"protocol"`
-	Attributes map[string]string  `json:"attrs"`
-	LocalIP    *StringList        `json:"localIP"`
-	LocalPort  *PortList          `json:"localPort"`
-	Process    *StringList        `json:"process"`
-	LocalOS    *StringList        `json:"localOS"`
-	Webhook    *WebhookRuleConfig `json:"webhook"`
+// RawMessage 无法从反射推断账户；协议自己声明，严格解码器无需知道协议名。
+type strictAccountConfig interface {
+	strictAccountType() reflect.Type
 }

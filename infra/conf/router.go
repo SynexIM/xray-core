@@ -140,29 +140,32 @@ type WebhookRuleConfig struct {
 	Headers       map[string]string `json:"headers"`
 }
 
+// 准入与原生解析共用外形，避免严格校验在跟随上游时漏掉新字段。
+type rawFieldRule struct {
+	RouterRule
+	Type       string             `json:"type"`
+	Domain     *StringList        `json:"domain"`
+	Domains    *StringList        `json:"domains"`
+	IP         *StringList        `json:"ip"`
+	Port       *PortList          `json:"port"`
+	Network    *NetworkList       `json:"network"`
+	SourceIP   *StringList        `json:"sourceIP"`
+	Source     *StringList        `json:"source"`
+	SourcePort *PortList          `json:"sourcePort"`
+	User       *StringList        `json:"user"`
+	VlessRoute *PortList          `json:"vlessRoute"`
+	InboundTag *StringList        `json:"inboundTag"`
+	Protocols  *StringList        `json:"protocol"`
+	Attributes map[string]string  `json:"attrs"`
+	LocalIP    *StringList        `json:"localIP"`
+	LocalPort  *PortList          `json:"localPort"`
+	Process    *StringList        `json:"process"`
+	LocalOS    *StringList        `json:"localOS"`
+	Webhook    *WebhookRuleConfig `json:"webhook"`
+}
+
 func parseFieldRule(msg json.RawMessage) (*router.RoutingRule, error) {
-	type RawFieldRule struct {
-		RouterRule
-		Domain     *StringList        `json:"domain"`
-		Domains    *StringList        `json:"domains"`
-		IP         *StringList        `json:"ip"`
-		Port       *PortList          `json:"port"`
-		Network    *NetworkList       `json:"network"`
-		SourceIP   *StringList        `json:"sourceIP"`
-		Source     *StringList        `json:"source"`
-		SourcePort *PortList          `json:"sourcePort"`
-		User       *StringList        `json:"user"`
-		VlessRoute *PortList          `json:"vlessRoute"`
-		InboundTag *StringList        `json:"inboundTag"`
-		Protocols  *StringList        `json:"protocol"`
-		Attributes map[string]string  `json:"attrs"`
-		LocalIP    *StringList        `json:"localIP"`
-		LocalPort  *PortList          `json:"localPort"`
-		Process    *StringList        `json:"process"`
-		LocalOS    *StringList        `json:"localOS"`
-		Webhook    *WebhookRuleConfig `json:"webhook"`
-	}
-	rawFieldRule := new(RawFieldRule)
+	rawFieldRule := new(rawFieldRule)
 	err := json.Unmarshal(msg, rawFieldRule)
 	if err != nil {
 		return nil, err

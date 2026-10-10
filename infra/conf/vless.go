@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -29,6 +30,9 @@ type VLessInboundFallback struct {
 	Dest json.RawMessage `json:"dest"`
 	Xver uint64          `json:"xver"`
 }
+
+func (*VLessInboundConfig) strictAccountType() reflect.Type  { return reflect.TypeFor[vless.Account]() }
+func (*VLessOutboundConfig) strictAccountType() reflect.Type { return reflect.TypeFor[vless.Account]() }
 
 type VLessInboundConfig struct {
 	Users      []json.RawMessage       `json:"users"`

@@ -2,6 +2,7 @@ package conf
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 
 	"github.com/xtls/xray-core/common/errors"
@@ -20,6 +21,9 @@ type VMessAccount struct {
 	Security    string `json:"security"`
 	Experiments string `json:"experiments"`
 }
+
+func (*VMessInboundConfig) strictAccountType() reflect.Type  { return reflect.TypeFor[VMessAccount]() }
+func (*VMessOutboundConfig) strictAccountType() reflect.Type { return reflect.TypeFor[VMessAccount]() }
 
 // Build implements Buildable
 func (a *VMessAccount) Build() *vmess.Account {

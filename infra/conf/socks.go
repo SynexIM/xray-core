@@ -2,6 +2,7 @@ package conf
 
 import (
 	"encoding/json"
+	"reflect"
 
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/protocol"
@@ -16,6 +17,9 @@ type SocksAccount struct {
 	// Email 用于规则匹配和会话管理。
 	Email string `json:"email"`
 }
+
+func (*SocksServerConfig) strictAccountType() reflect.Type { return reflect.TypeFor[SocksAccount]() }
+func (*SocksClientConfig) strictAccountType() reflect.Type { return reflect.TypeFor[SocksAccount]() }
 
 func (v *SocksAccount) Build() *socks.Account {
 	return &socks.Account{

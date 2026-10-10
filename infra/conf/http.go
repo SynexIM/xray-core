@@ -2,6 +2,7 @@ package conf
 
 import (
 	"encoding/json"
+	"reflect"
 
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/protocol"
@@ -16,6 +17,9 @@ type HTTPAccount struct {
 	// Email 用于规则匹配和会话管理。
 	Email string `json:"email"`
 }
+
+func (*HTTPServerConfig) strictAccountType() reflect.Type { return reflect.TypeFor[HTTPAccount]() }
+func (*HTTPClientConfig) strictAccountType() reflect.Type { return reflect.TypeFor[HTTPAccount]() }
 
 func (v *HTTPAccount) Build() *http.Account {
 	return &http.Account{
