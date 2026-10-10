@@ -46,7 +46,9 @@ type tcpWorker struct {
 	uplinkCounter   stats.Counter
 	downlinkCounter stats.Counter
 
-	hub internet.Listener
+	hub         internet.Listener
+	drained     bool
+	retiredHubs []drainableListener
 
 	ctx context.Context
 }
@@ -86,7 +88,7 @@ func (w *tcpWorker) callback(conn stat.Connection) {
 					isLoopBack = true
 				}
 			} else {
-				if w.hub.Addr().String() == dest.NetAddr() {
+				if conn.LocalAddr().String() == dest.NetAddr() {
 					isLoopBack = true
 				}
 			}
@@ -150,6 +152,12 @@ func (w *tcpWorker) Start() error {
 
 func (w *tcpWorker) Close() error {
 	var errs []interface{}
+	for _, hub := range w.retiredHubs {
+		if err := hub.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	w.retiredHubs = nil
 	if w.hub != nil {
 		if err := common.Close(w.hub); err != nil {
 			errs = append(errs, err)
@@ -272,6 +280,7 @@ type udpWorker struct {
 
 	checker    *task.Periodic
 	activeConn map[connID]*udpConn
+	draining   bool
 
 	ctx  context.Context
 	cone bool
@@ -284,6 +293,9 @@ func (w *udpWorker) getConnection(id connID) (*udpConn, bool) {
 	if conn, found := w.activeConn[id]; found && !conn.done.Done() {
 		conn.updateActivity()
 		return conn, true
+	}
+	if w.draining {
+		return nil, false
 	}
 
 	pReader, pWriter := pipe.New(pipe.DiscardOverflow(), pipe.WithSizeLimit(16*1024))
@@ -322,6 +334,10 @@ func (w *udpWorker) callback(b *buf.Buffer, source net.Destination, originalDest
 		b.UDP = &originalDest
 	}
 	conn, existing := w.getConnection(id)
+	if conn == nil {
+		b.Release()
+		return
+	}
 
 	// payload will be discarded in pipe is full.
 	conn.writer.WriteMultiBuffer(buf.MultiBuffer{b})
@@ -476,7 +492,9 @@ type dsWorker struct {
 	uplinkCounter   stats.Counter
 	downlinkCounter stats.Counter
 
-	hub internet.Listener
+	hub         internet.Listener
+	drained     bool
+	retiredHubs []drainableListener
 
 	ctx context.Context
 }
@@ -536,6 +554,12 @@ func (w *dsWorker) Start() error {
 
 func (w *dsWorker) Close() error {
 	var errs []interface{}
+	for _, hub := range w.retiredHubs {
+		if err := hub.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	w.retiredHubs = nil
 	if w.hub != nil {
 		if err := common.Close(w.hub); err != nil {
 			errs = append(errs, err)

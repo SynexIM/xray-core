@@ -99,3 +99,4 @@ go test -race ./app/limit/... ./app/dispatcher/... ./app/proxyman/... ./infra/co
 ```
 
 上游 router command 的超时 cancel 告警、协议 unsafe.Pointer 等指定 vet 告警保持原状。geoip/geosite 及部分网络测试需要外部资源，不能只凭构建声称通过。
+- `app/proxyman/inbound`：补齐 `Manager.DrainHandler` / `ResumeHandler` 与 AlwaysOn / worker 的排空实现（rebase 时漏移植，从 20bc7afb 找回）。`DrainInbound` 只关监听口、已建立会话继续；gRPC / H3 等关监听会断流的传输拒绝排空。ProxyAstra agent 新旧交接依赖它。

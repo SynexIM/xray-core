@@ -69,6 +69,36 @@ func (m *Manager) GetHandler(ctx context.Context, tag string) (inbound.Handler, 
 	return handler, nil
 }
 
+// Keep the handler registered while its listeners are drained. Holding the
+// manager read lock prevents a concurrent removal from closing proxy state.
+func (m *Manager) DrainHandler(ctx context.Context, tag string) error {
+	m.access.RLock()
+	defer m.access.RUnlock()
+	h, ok := m.taggedHandlers[tag]
+	if !ok {
+		return errors.New("handler not found: ", tag)
+	}
+	d, ok := h.(interface{ Drain() error })
+	if !ok {
+		return errors.New("handler does not support listener drain")
+	}
+	return d.Drain()
+}
+
+func (m *Manager) ResumeHandler(ctx context.Context, tag string) error {
+	m.access.RLock()
+	defer m.access.RUnlock()
+	h, ok := m.taggedHandlers[tag]
+	if !ok {
+		return errors.New("handler not found: ", tag)
+	}
+	r, ok := h.(interface{ Resume() error })
+	if !ok {
+		return errors.New("handler does not support listener resume")
+	}
+	return r.Resume()
+}
+
 // RemoveHandler implements inbound.Manager.
 func (m *Manager) RemoveHandler(ctx context.Context, tag string) error {
 	if tag == "" {

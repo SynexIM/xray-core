@@ -2,6 +2,7 @@ package inbound
 
 import (
 	"context"
+	"sync"
 
 	"github.com/xtls/xray-core/app/proxyman"
 	"github.com/xtls/xray-core/common"
@@ -44,6 +45,9 @@ func getStatCounter(v *core.Instance, tag string) (stats.Counter, stats.Counter)
 }
 
 type AlwaysOnInboundHandler struct {
+	lifecycle      sync.Mutex
+	running        bool
+	closed         bool
 	proxyConfig    interface{}
 	receiverConfig *proxyman.ReceiverConfig
 	proxy          proxy.Inbound
@@ -172,6 +176,14 @@ func NewAlwaysOnInboundHandler(ctx context.Context, tag string, receiverConfig *
 
 // Start implements common.Runnable.
 func (h *AlwaysOnInboundHandler) Start() error {
+	h.lifecycle.Lock()
+	defer h.lifecycle.Unlock()
+	if h.closed {
+		return errors.New("handler is closed")
+	}
+	if h.running {
+		return nil
+	}
 	// for inbound without worker (TUN)
 	if run, ok := h.proxy.(common.Runnable); ok {
 		if err := run.Start(); err != nil {
@@ -183,11 +195,19 @@ func (h *AlwaysOnInboundHandler) Start() error {
 			return err
 		}
 	}
+	h.running = true
 	return nil
 }
 
 // Close implements common.Closable.
 func (h *AlwaysOnInboundHandler) Close() error {
+	h.lifecycle.Lock()
+	defer h.lifecycle.Unlock()
+	if h.closed {
+		return nil
+	}
+	h.closed = true
+	h.running = false
 	var errs []error
 	for _, worker := range h.workers {
 		errs = append(errs, worker.Close())
