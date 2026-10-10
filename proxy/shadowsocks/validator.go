@@ -14,9 +14,14 @@ import (
 )
 
 // Validator stores valid Shadowsocks users.
+//
+// index 是 strings.ToLower(email) → users 下标：Del / GetByEmail 原来都是线性扫
+// email，5 万实例/单节点组下管理路径就是 O(N)。认证路径（Get）没动——AEAD 的
+// 逐个试解是**协议缺陷不是代码缺陷**，靠「SS 一律用 2022 版」规避。
 type Validator struct {
 	sync.RWMutex
 	users []*protocol.MemoryUser
+	index map[string]int
 
 	behaviorSeed  uint64
 	behaviorFused bool
@@ -32,6 +37,16 @@ func (v *Validator) Add(u *protocol.MemoryUser) error {
 	account := u.Account.(*MemoryAccount)
 	if !account.Cipher.IsAEAD() && len(v.users) > 0 {
 		return errors.New("The cipher is not support Single-port Multi-user")
+	}
+	if u.Email != "" {
+		key := strings.ToLower(u.Email)
+		if _, exists := v.index[key]; exists {
+			return errors.New("User ", u.Email, " already exists.")
+		}
+		if v.index == nil {
+			v.index = make(map[string]int)
+		}
+		v.index[key] = len(v.users)
 	}
 	v.users = append(v.users, u)
 
@@ -54,22 +69,19 @@ func (v *Validator) Del(email string) error {
 	defer v.Unlock()
 
 	email = strings.ToLower(email)
-	idx := -1
-	for i, u := range v.users {
-		if strings.EqualFold(u.Email, email) {
-			idx = i
-			break
-		}
-	}
-
-	if idx == -1 {
+	idx, ok := v.index[email]
+	if !ok {
 		return errors.New("User ", email, " not found.")
 	}
-	ulen := len(v.users)
+	last := len(v.users) - 1
 
-	v.users[idx] = v.users[ulen-1]
-	v.users[ulen-1] = nil
-	v.users = v.users[:ulen-1]
+	delete(v.index, email)
+	if idx != last {
+		v.users[idx] = v.users[last]
+		v.index[strings.ToLower(v.users[idx].Email)] = idx
+	}
+	v.users[last] = nil
+	v.users = v.users[:last]
 
 	return nil
 }
@@ -83,11 +95,8 @@ func (v *Validator) GetByEmail(email string) *protocol.MemoryUser {
 	v.Lock()
 	defer v.Unlock()
 
-	email = strings.ToLower(email)
-	for _, u := range v.users {
-		if strings.EqualFold(u.Email, email) {
-			return u
-		}
+	if idx, ok := v.index[strings.ToLower(email)]; ok {
+		return v.users[idx]
 	}
 	return nil
 }

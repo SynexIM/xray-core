@@ -76,6 +76,7 @@ message UserStat {
 message GetUsersStatsRequest {
   bool include_traffic = 1;
   bool reset = 2;
+  repeated string emails = 3;
 }
 
 message GetUsersStatsResponse {

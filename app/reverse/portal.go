@@ -53,6 +53,12 @@ func NewPortal(config *PortalConfig, ohm outbound.Manager) (*Portal, error) {
 	}, nil
 }
 
+// Tag 是这个 portal 注册到 outbound manager 上的标签，热改时按它定位。
+func (p *Portal) Tag() string { return p.tag }
+
+// Domain 是它对应的内部域名。
+func (p *Portal) Domain() string { return p.domain }
+
 func (p *Portal) Start() error {
 	return p.ohm.AddHandler(context.Background(), &Outbound{
 		portal: p,

@@ -1,10 +1,15 @@
 package scenarios
 
 import (
+	"context"
+	"fmt"
+	"io"
 	"testing"
 	"time"
 
+	"github.com/xtls/xray-core/app/commander"
 	"github.com/xtls/xray-core/app/proxyman"
+	"github.com/xtls/xray-core/app/proxyman/command"
 	"github.com/xtls/xray-core/app/router"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/net"
@@ -19,8 +24,99 @@ import (
 	"github.com/xtls/xray-core/testing/servers/tcp"
 	"github.com/xtls/xray-core/testing/servers/udp"
 	xproxy "golang.org/x/net/proxy"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	socks4 "h12.io/socks"
 )
+
+func TestSocksHotAddedUserBandwidthLimit(t *testing.T) {
+	const (
+		payloadBytes   = 512 * 1024
+		limitBitPerSec = 2_000_000
+	)
+	tcpServer := tcp.Server{SendFirst: make([]byte, payloadBytes), MsgProcessor: xor}
+	dest, err := tcpServer.Start()
+	common.Must(err)
+	defer tcpServer.Close()
+
+	serverPort := tcp.PickPort()
+	commandPort := tcp.PickPort()
+	serverConfig := &core.Config{
+		App: []*serial.TypedMessage{
+			serial.ToTypedMessage(&commander.Config{
+				Tag:    "api",
+				Listen: fmt.Sprintf("127.0.0.1:%d", commandPort),
+				Service: []*serial.TypedMessage{
+					serial.ToTypedMessage(&command.Config{}),
+				},
+			}),
+		},
+		Inbound: []*core.InboundHandlerConfig{{
+			Tag: "limited-socks",
+			ReceiverSettings: serial.ToTypedMessage(&proxyman.ReceiverConfig{
+				PortList: &net.PortList{Range: []*net.PortRange{net.SinglePortRange(serverPort)}},
+				Listen:   net.NewIPOrDomain(net.LocalHostIP),
+			}),
+			ProxySettings: serial.ToTypedMessage(&socks.ServerConfig{
+				AuthType: socks.AuthType_PASSWORD,
+			}),
+		}},
+		Outbound: []*core.OutboundHandlerConfig{{
+			ProxySettings: serial.ToTypedMessage(&freedom.Config{
+				FinalRules: []*freedom.FinalRuleConfig{{Action: freedom.RuleAction_Allow}},
+			}),
+		}},
+	}
+
+	servers, err := InitializeServerConfigs(serverConfig)
+	common.Must(err)
+	defer CloseAllServers(servers)
+
+	commandConn, err := grpc.NewClient(
+		fmt.Sprintf("127.0.0.1:%d", commandPort),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	common.Must(err)
+	defer commandConn.Close()
+	_, err = command.NewHandlerServiceClient(commandConn).AlterInbound(
+		context.Background(),
+		&command.AlterInboundRequest{
+			Tag: "limited-socks",
+			Operation: serial.ToTypedMessage(&command.AddUserOperation{
+				User: &protocol.User{
+					Email:        "limited",
+					BandwidthBps: limitBitPerSec,
+					Account: serial.ToTypedMessage(&socks.Account{
+						Username: "limited",
+						Password: "secret",
+					}),
+				},
+			}),
+		},
+	)
+	common.Must(err)
+
+	dialer, err := xproxy.SOCKS5(
+		"tcp",
+		net.TCPDestination(net.LocalHostIP, serverPort).NetAddr(),
+		&xproxy.Auth{User: "limited", Password: "secret"},
+		xproxy.Direct,
+	)
+	common.Must(err)
+	conn, err := dialer.Dial("tcp", dest.NetAddr())
+	common.Must(err)
+	defer conn.Close()
+
+	started := time.Now()
+	if _, err := io.ReadFull(conn, make([]byte, payloadBytes)); err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Since(started)
+	wantMinimum := time.Duration(payloadBytes*8*int(time.Second)/limitBitPerSec) * 3 / 4
+	if elapsed < wantMinimum {
+		t.Fatalf("%d bytes crossed a %d bit/s user in %v, want at least %v", payloadBytes, limitBitPerSec, elapsed, wantMinimum)
+	}
+}
 
 func TestSocksBridgeTCP(t *testing.T) {
 	tcpServer := tcp.Server{

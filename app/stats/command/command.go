@@ -86,15 +86,17 @@ func (s *statsServer) GetAllOnlineUsers(ctx context.Context, request *GetAllOnli
 }
 
 func (s *statsServer) GetUsersStats(ctx context.Context, request *GetUsersStatsRequest) (*GetUsersStatsResponse, error) {
+	if len(request.Emails) > 0 {
+		return s.scopedUsersStats(request)
+	}
 	userMap := make(map[string]*UserStat)
 
 	s.stats.VisitOnlineMaps(func(name string, om feature_stats.OnlineMap) bool {
+		_, rest, _ := strings.Cut(name, ">>>")
+		email, _, _ := strings.Cut(rest, ">>>")
 		if om.Count() == 0 {
 			return true
 		}
-
-		_, rest, _ := strings.Cut(name, ">>>")
-		email, _, _ := strings.Cut(rest, ">>>")
 
 		user := &UserStat{Email: email}
 		om.ForEach(func(ip string, lastSeen int64) bool {
@@ -120,6 +122,9 @@ func (s *statsServer) GetUsersStats(ctx context.Context, request *GetUsersStatsR
 			suffixDownlink = ">>>traffic>>>downlink"
 		)
 		s.stats.VisitCounters(func(name string, c feature_stats.Counter) bool {
+			if !strings.HasPrefix(name, prefixUser) {
+				return true
+			}
 			var email string
 			var isUplink bool
 
@@ -159,6 +164,43 @@ func (s *statsServer) GetUsersStats(ctx context.Context, request *GetUsersStatsR
 	}
 
 	return resp, nil
+}
+
+func (s *statsServer) scopedUsersStats(request *GetUsersStatsRequest) (*GetUsersStatsResponse, error) {
+	if len(request.Emails) > 2000 {
+		return nil, status.Error(codes.InvalidArgument, "at most 2000 user identities may be requested")
+	}
+	response := &GetUsersStatsResponse{}
+	seen := map[string]bool{}
+	for _, email := range request.Emails {
+		if seen[email] {
+			continue
+		}
+		seen[email] = true
+		row := &UserStat{Email: email}
+		prefix := "user>>>" + email + ">>>"
+		if online := s.stats.GetOnlineMap(prefix + "online"); online != nil {
+			online.ForEach(func(ip string, lastSeen int64) bool {
+				row.Ips = append(row.Ips, &OnlineIPEntry{Ip: ip, LastSeen: lastSeen})
+				return true
+			})
+		}
+		if request.IncludeTraffic {
+			read := func(direction string) int64 {
+				counter := s.stats.GetCounter(prefix + "traffic>>>" + direction)
+				if counter == nil {
+					return 0
+				}
+				if request.Reset_ {
+					return counter.Set(0)
+				}
+				return counter.Value()
+			}
+			row.Traffic = &TrafficUserStat{Uplink: read("uplink"), Downlink: read("downlink")}
+		}
+		response.Users = append(response.Users, row)
+	}
+	return response, nil
 }
 
 func (s *statsServer) QueryStats(ctx context.Context, request *QueryStatsRequest) (*QueryStatsResponse, error) {

@@ -81,14 +81,10 @@ func (v *Validator) Get(auth string) (user *protocol.MemoryUser) {
 		if user = v.GetByID(id); user != nil {
 			VR := net.PortFromBytes(id[6:8])
 			if user.Account.(*MemoryAccount).VR != VR {
-				user = &protocol.MemoryUser{
-					Email: user.Email,
-					Level: user.Level,
-					Account: &MemoryAccount{
-						Auth: auth,
-						VR:   VR,
-					},
-				}
+				alias := protocol.ToProtoUser(user).RuntimeMemoryUser()
+				alias.Account = &MemoryAccount{Auth: auth, VR: VR}
+				alias.InheritRuntimeConfig(user)
+				user = alias
 			}
 		}
 		return

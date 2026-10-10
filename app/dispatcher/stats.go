@@ -23,3 +23,19 @@ func (w *SizeStatWriter) Close() error {
 func (w *SizeStatWriter) Interrupt() {
 	common.Interrupt(w.Writer)
 }
+
+// siteReadCounter counts bytes read through a reader into a stats counter. It is
+// used for per-(user,site) uplink accounting, chained alongside the per-user
+// uplink counter on the TimeoutWrapperReader.
+type siteReadCounter struct {
+	buf.Reader
+	counter stats.Counter
+}
+
+func (r *siteReadCounter) ReadMultiBuffer() (buf.MultiBuffer, error) {
+	mb, err := r.Reader.ReadMultiBuffer()
+	if mb != nil {
+		r.counter.Add(int64(mb.Len()))
+	}
+	return mb, err
+}

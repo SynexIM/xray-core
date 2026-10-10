@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+// app.fairshare.command：节点级拥塞门控（common/protocol/node_fairshare.go）的下发面。
+// 所有参数由上层下发；0 一律是「没有这一项」，内核不藏默认值。
+package xray.app.fairshare.command;
+option csharp_namespace = "Xray.App.FairShare.Command";
+option go_package = "github.com/xtls/xray-core/app/fairshare/command";
+option java_package = "com.xray.app.fairshare.command";
+option java_multiple_files = true;
+
+service FairShareService {
+  // SetNodeBandwidth 设置节点整形上限 root_cap 与拥塞滞回。avail_bps = 0 关闭节点级调度。
+  rpc SetNodeBandwidth(SetNodeBandwidthRequest) returns (SetNodeBandwidthResponse) {}
+
+  // SetClassPolicy 整份替换 class 表。没出现在请求里的 class 即被删除。
+  rpc SetClassPolicy(SetClassPolicyRequest) returns (SetClassPolicyResponse) {}
+
+  // GetStatus 读调度器运行态（含实测吞吐，供上层切分共享链路容量）。
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse) {}
+}
+
+// ⚠️ 单位：本文件里的速率一律是 **字节/秒**（avail_bps 是历史名字，也是字节/秒），
+// 而 common/protocol/user.proto 里 User 的 `*_bps` 是 **比特/秒**。
+message SetNodeBandwidthRequest {
+  uint64 avail_bps = 1; // root_cap，字节/秒。0 = 关闭节点级调度。
+  reserved 2, 3;        // 旧的节点级软/硬地板，已并入 ClassPolicy.floor_byte_per_sec。
+
+  // 拥塞滞回（百分比/计数）。
+  uint32 congestion_enter_percent = 4; // 利用率越过它进入拥挤态。0 = 不做判定，开着就一直按拥挤处理。
+  uint32 congestion_exit_percent = 5;  // 回落到它以下才考虑退出。0 或高于 enter 时取 enter。
+  uint32 congestion_exit_ticks = 6;    // 连续多少个 tick（1 秒）低于 exit 才退出。0 与 1 等价。
+}
+
+message SetNodeBandwidthResponse {}
+
+// ClassPolicy 是一组池共享的争抢参数，只在拥挤态起作用。0 = 没有这一项。
+message ClassPolicy {
+  string name = 1;   // 与 User.class 精确匹配。
+  uint32 weight = 2; // 拥挤时按它分剩余带宽。0 与 1 等价。
+  reserved 3, 4, 5, 6, 9; // 旧的 class 级常规上限/突发/地板占比/成员表，已由池整形与下列字段取代。
+
+  // class 全体活跃池共享的方向性保底（聚合，不是逐池）；没人用的部分当 tick 回流。
+  uint64 upload_reserved_byte_per_sec = 7;
+  uint64 download_reserved_byte_per_sec = 8;
+
+  // 拥挤时每个活跃池的地板（不超过它自己的需求）。整层给得起才给。
+  uint64 floor_byte_per_sec = 10;
+
+  // 重度识别：最近 heavy_window_seconds 秒平均用量 ≥ 标准 × heavy_percent% 的池，
+  // 拥挤时保底 = 它的持续速率，剩余带宽排在正常池之后分。任一为 0 = 不识别。
+  uint32 heavy_window_seconds = 11;
+  uint32 heavy_percent = 12;
+}
+
+message SetClassPolicyRequest {
+  repeated ClassPolicy classes = 1; // 整份替换。空列表 = 清空 class 表。
+}
+
+message SetClassPolicyResponse {}
+
+message GetStatusRequest {}
+
+message GetStatusResponse {
+  uint64 root_cap_byte_per_sec = 1; // 0 = 节点级调度没开
+  bool congested = 2;               // 当前是否处于拥挤态
+  uint32 active_members = 3;        // 最近一 tick 的活跃池数
+
+  // 注水截断：轮数用完还没收敛，余下的按权重一次分完。总额仍不超过 root_cap。
+  bool fill_truncated = 4;
+  uint32 fill_unresolved_members = 5;
+  uint64 fill_truncated_ticks = 6;
+  uint64 fill_truncated_total_ticks = 7;
+  uint32 fill_rounds = 8;
+
+  uint32 heavy_members = 9;                    // 活跃池里被识别为重度的个数
+  uint64 used_upload_byte_per_sec = 10;        // 最近一 tick 的实测吞吐
+  uint64 used_download_byte_per_sec = 11;
+  repeated ClassPolicy classes = 12;
+  uint32 congestion_enter_percent = 13;
+  uint32 congestion_exit_percent = 14;
+  uint32 congestion_exit_ticks = 15;
+}
+
+// Config 命令服务配置（gRPC server 经 RegisterConfig 实例化本服务）。
+message Config {}

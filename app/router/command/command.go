@@ -2,10 +2,12 @@ package command
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/errors"
+	"github.com/xtls/xray-core/common/serial"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/routing"
 	"github.com/xtls/xray-core/features/stats"
@@ -54,6 +56,14 @@ func (s *routingServer) OverrideBalancerTarget(ctx context.Context, request *Ove
 }
 
 func (s *routingServer) AddRule(ctx context.Context, request *AddRuleRequest) (*AddRuleResponse, error) {
+	if request.ReplaceExisting {
+		if writer, ok := s.router.(interface {
+			ReplaceRule(*serial.TypedMessage) error
+		}); ok {
+			return &AddRuleResponse{}, writer.ReplaceRule(request.Config)
+		}
+		return nil, errors.New("router cannot atomically replace a rule")
+	}
 	if bo, ok := s.router.(routing.Router); ok {
 		return &AddRuleResponse{}, bo.AddRule(request.Config, request.ShouldAppend)
 	}
@@ -79,6 +89,97 @@ func (s *routingServer) ListRule(ctx context.Context, request *ListRuleRequest) 
 		return response, nil
 	}
 	return nil, errors.New("unsupported router implementation")
+}
+
+// BatchAddRule appends/inserts many rules over a single gRPC call. Rules apply in
+// request order; per-rule failures are reported in the response rather than
+// aborting the batch, so the caller retries only the failed slots. This keeps
+// per-client route churn scaling with node requests, not per-rule round trips.
+func (s *routingServer) BatchAddRule(ctx context.Context, request *BatchAddRuleRequest) (*BatchRuleResponse, error) {
+	bo, ok := s.router.(routing.Router)
+	if !ok {
+		return nil, errors.New("unsupported router implementation")
+	}
+	response := &BatchRuleResponse{
+		Results: make([]*BatchRuleOperationResult, 0, len(request.Configs)),
+	}
+	// Prefer the router's own batch path (one lock, one snapshot, O(N)); fall back
+	// to per-rule AddRule for routers that do not provide it.
+	var batchErrs []error
+	if br, ok := s.router.(interface {
+		AddRules([]*serial.TypedMessage, bool) []error
+	}); ok {
+		batchErrs = br.AddRules(request.Configs, request.ShouldAppend)
+	}
+	for i, config := range request.Configs {
+		result := &BatchRuleOperationResult{Index: uint32(i)}
+		var err error
+		if batchErrs != nil {
+			err = batchErrs[i]
+		} else {
+			err = bo.AddRule(config, request.ShouldAppend)
+		}
+		if err != nil {
+			result.Success = false
+			result.Error = err.Error()
+		} else {
+			result.Success = true
+		}
+		response.Results = append(response.Results, result)
+	}
+	return response, nil
+}
+
+// BatchRemoveRule removes many rules by tag over a single gRPC call, with the same
+// per-operation result reporting as BatchAddRule.
+func (s *routingServer) BatchRemoveRule(ctx context.Context, request *BatchRemoveRuleRequest) (*BatchRuleResponse, error) {
+	bo, ok := s.router.(routing.Router)
+	if !ok {
+		return nil, errors.New("unsupported router implementation")
+	}
+	response := &BatchRuleResponse{
+		Results: make([]*BatchRuleOperationResult, 0, len(request.RuleTags)),
+	}
+	for i, tag := range request.RuleTags {
+		result := &BatchRuleOperationResult{Index: uint32(i)}
+		if err := bo.RemoveRule(tag); err != nil {
+			result.Success = false
+			result.Error = err.Error()
+		} else {
+			result.Success = true
+		}
+		response.Results = append(response.Results, result)
+	}
+	return response, nil
+}
+
+// ListRuleFull returns the full per-rule routing data (rule tag, user/email
+// condition, target outbound, inbound) needed for snapshot/drift detection by the
+// backend reconcile path. It reads from the same ListRule() the router already
+// exposes; no router implementation change is required.
+func (s *routingServer) ListRuleFull(ctx context.Context, request *ListRuleFullRequest) (*ListRuleFullResponse, error) {
+	bo, ok := s.router.(routing.Router)
+	if !ok {
+		return nil, errors.New("unsupported router implementation")
+	}
+	response := &ListRuleFullResponse{}
+	var configs map[string][]byte
+	if reader, ok := s.router.(interface{ RuleConfigByTag() map[string][]byte }); ok {
+		configs = reader.RuleConfigByTag()
+	}
+	for _, v := range bo.ListRule() {
+		if len(request.Tags) > 0 && !slices.Contains(request.Tags, v.GetRuleTag()) {
+			continue
+		}
+		response.Rules = append(response.Rules, &FullRuleItem{
+			RuleTag:      v.GetRuleTag(),
+			OutboundTag:  v.GetOutboundTag(),
+			User:         v.GetUser(),
+			InboundTag:   v.GetInboundTag(),
+			NativeConfig: configs[v.GetRuleTag()],
+		})
+	}
+	return response, nil
 }
 
 // NewRoutingServer creates a statistics service with statistics manager.

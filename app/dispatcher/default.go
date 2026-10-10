@@ -28,8 +28,19 @@ var errSniffingTimeout = errors.New("timeout on sniffing")
 
 type cachedReader struct {
 	sync.Mutex
-	reader buf.TimeoutReader // *pipe.Reader or *buf.TimeoutWrapperReader
+	reader buf.TimeoutReader // *pipe.Reader、限速包装器 *buf.RateLimitReader 或 *buf.TimeoutWrapperReader
 	cache  buf.MultiBuffer
+}
+
+// asTimeoutReader 把任意 Reader 归一成 TimeoutReader。*pipe.Reader 与限速包装器
+// *buf.RateLimitReader 本身都实现 ReadMultiBufferTimeout，
+// 其余类型兜底套 TimeoutWrapperReader。禁止对 outbound.Reader 强转 *pipe.Reader：
+// 用户开限速后 Reader 已被包装，强转会 panic 拖崩整个 xray 进程。
+func asTimeoutReader(reader buf.Reader) buf.TimeoutReader {
+	if tr, ok := reader.(buf.TimeoutReader); ok {
+		return tr
+	}
+	return &buf.TimeoutWrapperReader{Reader: reader}
 }
 
 func (r *cachedReader) Cache(b *buf.Buffer, deadline time.Duration) error {
@@ -86,8 +97,18 @@ func (r *cachedReader) Interrupt() {
 		r.cache = buf.ReleaseMulti(r.cache)
 	}
 	r.Unlock()
-	if p, ok := r.reader.(*pipe.Reader); ok {
-		p.Interrupt()
+	// 限速包装器可能嵌套在 pipe.Reader 外层，逐层解包才能真正打断底层管道。
+	reader := buf.Reader(r.reader)
+	for {
+		switch v := reader.(type) {
+		case *pipe.Reader:
+			v.Interrupt()
+			return
+		case *buf.RateLimitReader:
+			reader = v.Reader
+		default:
+			return
+		}
 	}
 }
 
@@ -137,7 +158,7 @@ func (*DefaultDispatcher) Start() error {
 // Close implements common.Closable.
 func (*DefaultDispatcher) Close() error { return nil }
 
-func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *transport.Link) {
+func (d *DefaultDispatcher) getLink(ctx context.Context, destination net.Destination) (*transport.Link, *transport.Link) {
 	opt := pipe.OptionsFromContext(ctx)
 	uplinkReader, uplinkWriter := pipe.New(opt...)
 	downlinkReader, downlinkWriter := pipe.New(opt...)
@@ -158,6 +179,33 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 		user = sessionInbound.User
 	}
 
+	// 限速与公平只看用户本身，不看它有没有 email。
+	//
+	// 限速器是按 *MemoryUser 指针索引的（见 RuntimeRateLimiter），跟 email 毫无关系。
+	// 早先把这段和下面的 stats 一起放在 `len(user.Email) > 0` 里，
+	// 效果是**没有 email 的用户永远限不上速，也逃掉节点级公平**——
+	// 拥挤时他们会挤压守规矩的用户。stats 那部分才真的需要 email（计数器名里有它）。
+	if user != nil {
+		// 旧的 PIR/CIR/CBS 与方向峰值桶（不走池整形的用户）先挂；池整形器挂在外层，
+		// 拥挤时由节点调度器给它份额。getLink 有两条管道：inbound.Reader 是下行、
+		// outbound.Reader 是上行，各在读端包一次。
+		if !user.UsesTierShaping() {
+			limits := user.RuntimeDirectionalRateLimiters(buf.NewRateLimiterWithBurst)
+			if len(limits.Download) > 0 {
+				inboundLink.Reader = buf.NewRateLimitReaderWithLimiter(ctx, inboundLink.Reader, limits.Download...)
+			}
+			if len(limits.Upload) > 0 {
+				outboundLink.Reader = buf.NewRateLimitReaderWithLimiter(ctx, outboundLink.Reader, limits.Upload...)
+			}
+		}
+		if up, down, release := user.AcquireTierShapers(); release != nil {
+			context.AfterFunc(ctx, release)
+			inboundLink.Reader = buf.NewPacedReader(ctx, inboundLink.Reader, tierPacer(down))
+			outboundLink.Reader = buf.NewPacedReader(ctx, outboundLink.Reader, tierPacer(up))
+		}
+	}
+
+	// 统计要按 email 归集，所以这一段确实需要它。
 	if user != nil && len(user.Email) > 0 {
 		p := d.policy.ForLevel(user.Level)
 		if p.Stats.UserUplink {
@@ -179,12 +227,49 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 			}
 		}
 
+		if p.Stats.UserSite {
+			if site := siteKey(destination); site != "" {
+				if c, _ := d.stats.GetOrRegisterCounter(siteCounterName(user.Email, site, "uplink")); c != nil {
+					inboundLink.Writer = &SizeStatWriter{Counter: c, Writer: inboundLink.Writer}
+				}
+				if c, _ := d.stats.GetOrRegisterCounter(siteCounterName(user.Email, site, "downlink")); c != nil {
+					outboundLink.Writer = &SizeStatWriter{Counter: c, Writer: outboundLink.Writer}
+				}
+			}
+		}
+
 		if p.Stats.UserOnline {
 			trackOnlineIP(ctx, d.stats, user.Email, sessionInbound.Source.Address.String())
 		}
 	}
 
 	return inboundLink, outboundLink
+}
+
+// siteKey returns the per-destination "site" label for traffic aggregation: the
+// requested domain when present, otherwise the destination IP. For mixed/socks/
+// http this is the user's requested host, which is exactly the site we bill on.
+func siteKey(destination net.Destination) string {
+	addr := destination.Address
+	if addr == nil {
+		return ""
+	}
+	return addr.String()
+}
+
+// siteCounterName is the stats key node-agent's CollectSiteTraffic parses. The
+// "site>>>{domain}" segment sits alongside the per-user "traffic>>>" counters so
+// one QueryStats(pattern="user>>>") read collects both.
+func siteCounterName(email, site, dir string) string {
+	return "user>>>" + email + ">>>site>>>" + site + ">>>traffic>>>" + dir
+}
+
+// tierPacer keeps a nil shaper (unlimited direction) from becoming a non-nil Pacer.
+func tierPacer(s *protocol.TierShaper) buf.Pacer {
+	if s == nil {
+		return nil
+	}
+	return s.NewFlow()
 }
 
 func WrapLink(ctx context.Context, policyManager policy.Manager, statsManager stats.Manager, link *transport.Link) *transport.Link {
@@ -194,14 +279,34 @@ func WrapLink(ctx context.Context, policyManager policy.Manager, statsManager st
 		user = sessionInbound.User
 	}
 
-	link.Reader = &buf.TimeoutWrapperReader{Reader: link.Reader}
+	timeoutReader := &buf.TimeoutWrapperReader{Reader: link.Reader}
+	link.Reader = timeoutReader
 
+	// 同上：限速与公平只看用户本身，有没有 email 与它无关。
+	if user != nil {
+		if !user.UsesTierShaping() {
+			limits := user.RuntimeDirectionalRateLimiters(buf.NewRateLimiterWithBurst)
+			if len(limits.Upload) > 0 {
+				link.Reader = buf.NewRateLimitReaderWithLimiter(ctx, link.Reader, limits.Upload...)
+			}
+			if len(limits.Download) > 0 {
+				link.Writer = buf.NewRateLimitWriterWithLimiter(ctx, link.Writer, limits.Download...)
+			}
+		}
+		if up, down, release := user.AcquireTierShapers(); release != nil {
+			context.AfterFunc(ctx, release)
+			link.Reader = buf.NewPacedReader(ctx, link.Reader, tierPacer(up))
+			link.Writer = buf.NewPacedWriter(ctx, link.Writer, tierPacer(down))
+		}
+	}
+
+	// 统计要按 email 归集，所以这一段确实需要它。
 	if user != nil && len(user.Email) > 0 {
 		p := policyManager.ForLevel(user.Level)
 		if p.Stats.UserUplink {
 			name := "user>>>" + user.Email + ">>>traffic>>>uplink"
 			if c, _ := statsManager.GetOrRegisterCounter(name); c != nil {
-				link.Reader.(*buf.TimeoutWrapperReader).Counter = c
+				timeoutReader.Counter = c
 			}
 		}
 		if p.Stats.UserDownlink {
@@ -213,12 +318,89 @@ func WrapLink(ctx context.Context, policyManager policy.Manager, statsManager st
 				}
 			}
 		}
+		if p.Stats.UserSite {
+			if site := siteKey(outboundTarget(ctx)); site != "" {
+				if c, _ := statsManager.GetOrRegisterCounter(siteCounterName(user.Email, site, "uplink")); c != nil {
+					// timeoutReader already counts uplink bytes when its Counter is
+					// set; chain a site reader so both per-user and per-site count.
+					link.Reader = &siteReadCounter{Reader: link.Reader, counter: c}
+				}
+				if c, _ := statsManager.GetOrRegisterCounter(siteCounterName(user.Email, site, "downlink")); c != nil {
+					link.Writer = &SizeStatWriter{Counter: c, Writer: link.Writer}
+				}
+			}
+		}
+
 		if p.Stats.UserOnline {
 			trackOnlineIP(ctx, statsManager, user.Email, sessionInbound.Source.Address.String())
 		}
 	}
 
 	return link
+}
+
+// outboundTarget returns the resolved destination for the current connection, set
+// by Dispatch/DispatchLink before WrapLink runs.
+func outboundTarget(ctx context.Context) net.Destination {
+	obs := session.OutboundsFromContext(ctx)
+	if len(obs) == 0 {
+		return net.Destination{}
+	}
+	return obs[len(obs)-1].Target
+}
+
+// enforceConnLimit reserves the protocol-agnostic user slot and, when stats is
+// enabled, increments process-local inbound and user gauges. Every successful
+// increment is released once when the connection context ends.
+func enforceConnLimit(ctx context.Context, sm stats.Manager) error {
+	sessionInbound := session.InboundFromContext(ctx)
+	if sessionInbound == nil {
+		return nil
+	}
+	releases := make([]func(), 0, 3)
+	if user := sessionInbound.User; user != nil {
+		release, ok := user.AcquireRuntimeConnection()
+		if !ok {
+			return errors.New("user ", user.Email, " connection limit exceeded")
+		}
+		releases = append(releases, release)
+		if user.Email != "" && !isNoopStatsManager(sm) {
+			counter, err := sm.GetOrRegisterCounter(stats.ActiveUserConnectionCounterName(user.Email))
+			if err != nil {
+				releaseAll(releases)
+				return errors.New("register active user connection counter").Base(err)
+			}
+			if counter != nil {
+				counter.Add(1)
+				releases = append(releases, func() { counter.Add(-1) })
+			}
+		}
+	}
+	if sessionInbound.Tag != "" && !isNoopStatsManager(sm) {
+		counter, err := sm.GetOrRegisterCounter(stats.ActiveConnectionCounterName(sessionInbound.Tag))
+		if err != nil {
+			releaseAll(releases)
+			return errors.New("register active connection counter").Base(err)
+		}
+		if counter != nil {
+			counter.Add(1)
+			releases = append(releases, func() { counter.Add(-1) })
+		}
+	}
+	var once sync.Once
+	context.AfterFunc(ctx, func() { once.Do(func() { releaseAll(releases) }) })
+	return nil
+}
+
+func isNoopStatsManager(sm stats.Manager) bool {
+	_, noop := sm.(stats.NoopManager)
+	return noop
+}
+
+func releaseAll(releases []func()) {
+	for _, release := range releases {
+		release()
+	}
 }
 
 func trackOnlineIP(ctx context.Context, sm stats.Manager, email, ip string) {
@@ -268,6 +450,9 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 	if !destination.IsValid() {
 		panic("Dispatcher: Invalid destination.")
 	}
+	if err := enforceConnLimit(ctx, d.stats); err != nil {
+		return nil, err
+	}
 	outbounds := session.OutboundsFromContext(ctx)
 	if len(outbounds) == 0 {
 		outbounds = []*session.Outbound{{}}
@@ -283,13 +468,13 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 	}
 
 	sniffingRequest := content.SniffingRequest
-	inbound, outbound := d.getLink(ctx)
+	inbound, outbound := d.getLink(ctx, destination)
 	if !sniffingRequest.Enabled {
 		go d.routedDispatch(ctx, outbound, destination)
 	} else {
 		go func() {
 			cReader := &cachedReader{
-				reader: outbound.Reader.(*pipe.Reader),
+				reader: asTimeoutReader(outbound.Reader),
 			}
 			outbound.Reader = cReader
 			result, err := sniffer(ctx, cReader, sniffingRequest.MetadataOnly, destination.Network)
@@ -325,6 +510,9 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 	if !destination.IsValid() {
 		return errors.New("Dispatcher: Invalid destination.")
 	}
+	if err := enforceConnLimit(ctx, d.stats); err != nil {
+		return err
+	}
 	outbounds := session.OutboundsFromContext(ctx)
 	if len(outbounds) == 0 {
 		outbounds = []*session.Outbound{{}}
@@ -344,7 +532,7 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 		d.routedDispatch(ctx, outbound, destination)
 	} else {
 		cReader := &cachedReader{
-			reader: outbound.Reader.(buf.TimeoutReader),
+			reader: asTimeoutReader(outbound.Reader),
 		}
 		outbound.Reader = cReader
 		result, err := sniffer(ctx, cReader, sniffingRequest.MetadataOnly, destination.Network)
@@ -431,7 +619,48 @@ func sniffer(ctx context.Context, cReader *cachedReader, metadataOnly bool, netw
 	return contentResult, contentErr
 }
 
+// guardOutbound 只看以 "guard:" 开头的路由规则（节点默认安全规则），命中返回其出站 tag，否则为空。
+func (d *DefaultDispatcher) guardOutbound(routingLink routing.Context) string {
+	if d.router == nil {
+		return ""
+	}
+	route, err := d.router.PickRoute(routingLink)
+	if err != nil || !strings.HasPrefix(route.GetRuleTag(), "guard:") {
+		return ""
+	}
+	return route.GetOutboundTag()
+}
+
+// userEgressTag returns the authenticated user's dedicated outbound, or empty
+// when routing must proceed normally.
+func userEgressTag(ctx context.Context) string {
+	inbound := session.InboundFromContext(ctx)
+	if inbound == nil || inbound.User == nil {
+		return ""
+	}
+	return inbound.User.RuntimeConfig().EgressTag
+}
+
 func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.Link, destination net.Destination) {
+	if inbound := session.InboundFromContext(ctx); inbound != nil && inbound.User != nil {
+		managed, cancel := context.WithCancel(ctx)
+		ctx = managed
+		stop := func() {
+			cancel()
+			common.Interrupt(link.Reader)
+			common.Interrupt(link.Writer)
+			if inbound.Conn != nil {
+				common.Close(inbound.Conn)
+			}
+		}
+		release, ok := inbound.User.TrackRuntimeSession(stop)
+		if !ok {
+			stop()
+			return
+		}
+		defer release()
+		defer cancel()
+	}
 	outbounds := session.OutboundsFromContext(ctx)
 	ob := outbounds[len(outbounds)-1]
 
@@ -448,6 +677,28 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 			handler = h
 		} else {
 			errors.LogError(ctx, "non existing tag for platform initialized detour: ", forcedOutboundTag)
+			common.Close(link.Writer)
+			common.Interrupt(link.Reader)
+			return
+		}
+	} else if egressTag := userEgressTag(ctx); egressTag != "" {
+		if guardTag := d.guardOutbound(routingLink); guardTag != "" {
+			// 节点默认安全规则（ruleTag 以 guard: 开头，如拦 BT、SMTP 25、内网与云元数据）优先于固定出口：
+			// 否则有专属出口的用户完全绕过路由，安全规则形同虚设。
+			if h := d.ohm.GetHandler(guardTag); h != nil {
+				isPickRoute = 2
+				errors.LogInfo(ctx, "guard rule overrides dedicated egress, taking [", guardTag, "] for [", destination, "]")
+				handler = h
+			}
+		}
+		if handler != nil {
+			// 已被安全规则接管
+		} else if h := d.ohm.GetHandler(egressTag); h != nil {
+			isPickRoute = 1
+			errors.LogInfo(ctx, "taking dedicated egress [", egressTag, "] for [", destination, "]")
+			handler = h
+		} else {
+			errors.LogError(ctx, "non existing tag for dedicated egress: ", egressTag)
 			common.Close(link.Writer)
 			common.Interrupt(link.Reader)
 			return
@@ -505,4 +756,8 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 	}
 
 	handler.Dispatch(ctx, link)
+
+	// ipipx 旁路：连接生命周期结束后记一条访问（唯一 emit 点）。此刻 freedom 已回填 DialedRemoteAddr，
+	// destIP 可信；域名取自 ob.Target/OriginalTarget。覆盖 freedom 真出口 + blackhole 禁陆，每连接恰一条。
+	emitAccessForOutbound(ctx, ob, time.Now().Unix())
 }

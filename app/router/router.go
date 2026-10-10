@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"google.golang.org/protobuf/proto"
 	"maps"
 	"sync"
 	"sync/atomic"
@@ -19,7 +20,7 @@ import (
 // Router is an implementation of routing.Router.
 type Router struct {
 	domainStrategy Config_DomainStrategy
-	rules          atomic.Pointer[[]*Rule]
+	rules          atomic.Pointer[ruleSet]
 	scriptPath     string
 	script         *scriptEngine
 	balancers      atomic.Pointer[map[string]*Balancer]
@@ -37,6 +38,10 @@ type Route struct {
 	outboundGroupTags []string
 	outboundTag       string
 	ruleTag           string
+	// Set only when this Route describes a *rule* (see ListRule) rather than a
+	// routing decision for a live connection.
+	userEmail  []string
+	inboundTag []string
 }
 
 // Init initializes the Router.
@@ -48,7 +53,7 @@ func (r *Router) Init(ctx context.Context, config *Config, d dns.Client, ohm out
 	r.ohm = ohm
 	r.dispatcher = dispatcher
 
-	r.rules.Store(new([]*Rule))
+	r.rules.Store(newRuleSet(nil))
 	r.balancers.Store(&map[string]*Balancer{})
 	return r.ReloadRules(config, false)
 }
@@ -86,73 +91,158 @@ func (r *Router) AddRule(config *serial.TypedMessage, shouldAppend bool) error {
 	return errors.New("AddRule: config type error")
 }
 
+// AddRules applies many configs under one lock and publishes one snapshot, so
+// adding N rules costs O(N) instead of the O(N^2) of N AddRule calls (each of
+// which copies the whole rule list). Configs apply in order; a config that fails
+// is skipped as a whole and its error is returned at the same index, so callers
+// retry only the failed slots. shouldAppend=false starts from an empty rule set
+// and appends every config to it.
+func (r *Router) AddRules(configs []*serial.TypedMessage, shouldAppend bool) []error {
+	errs := make([]error, len(configs))
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	old := r.rules.Load()
+	oldBalancers := *r.balancers.Load()
+	var rules []*Rule
+	balancers := make(map[string]*Balancer, len(oldBalancers))
+	existTags := make(map[string]bool, len(old.all))
+	if shouldAppend {
+		rules = make([]*Rule, len(old.all), len(old.all)+len(configs))
+		copy(rules, old.all)
+		maps.Copy(balancers, oldBalancers)
+		for _, rule := range old.all {
+			existTags[rule.RuleTag] = true
+		}
+	}
+	for i, msg := range configs {
+		inst, err := msg.GetInstance()
+		if err != nil {
+			errs[i] = err
+			continue
+		}
+		c, ok := inst.(*Config)
+		if !ok {
+			errs[i] = errors.New("AddRule: config type error")
+			continue
+		}
+		added, addedBalancers, err := r.buildConfig(c, balancers, existTags)
+		if err != nil {
+			errs[i] = err
+			continue
+		}
+		for _, rule := range added {
+			existTags[rule.RuleTag] = true
+		}
+		rules = append(rules, added...)
+		maps.Copy(balancers, addedBalancers)
+	}
+	r.balancers.Store(&balancers)
+	r.rules.Store(newRuleSet(rules))
+	if !shouldAppend {
+		closeWebhooks(old.all)
+	}
+	return errs
+}
+
 func (r *Router) ReloadRules(config *Config, shouldAppend bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	oldRules := *r.rules.Load()
+	old := r.rules.Load()
 	oldBalancers := *r.balancers.Load()
 
 	var newRules []*Rule
 	newBalancers := make(map[string]*Balancer)
-	existTags := make(map[string]bool, len(oldRules)+len(config.Rule))
+	existTags := make(map[string]bool, len(old.all)+len(config.Rule))
 	if shouldAppend {
-		newRules = append(newRules, oldRules...)
+		newRules = make([]*Rule, len(old.all), len(old.all)+len(config.Rule))
+		copy(newRules, old.all)
 		maps.Copy(newBalancers, oldBalancers)
-		for _, rule := range oldRules {
+		for _, rule := range old.all {
 			existTags[rule.RuleTag] = true
 		}
 	}
 
+	added, addedBalancers, err := r.buildConfig(config, newBalancers, existTags)
+	if err != nil {
+		return err
+	}
+	maps.Copy(newBalancers, addedBalancers)
+	newRules = append(newRules, added...)
+
+	r.balancers.Store(&newBalancers)
+	r.rules.Store(newRuleSet(newRules))
+	if !shouldAppend {
+		closeWebhooks(old.all)
+	}
+	return nil
+}
+
+// buildConfig turns one Config into rules and balancers without mutating the
+// given balancer / tag state, so a failing config leaves nothing behind.
+func (r *Router) buildConfig(config *Config, balancers map[string]*Balancer, existTags map[string]bool) ([]*Rule, map[string]*Balancer, error) {
+	added := make(map[string]*Balancer)
 	for _, rule := range config.BalancingRule {
-		if _, found := newBalancers[rule.Tag]; found {
-			return errors.New("duplicate balancer tag")
+		if _, found := balancers[rule.Tag]; found {
+			return nil, nil, errors.New("duplicate balancer tag")
+		}
+		if _, found := added[rule.Tag]; found {
+			return nil, nil, errors.New("duplicate balancer tag")
 		}
 		balancer, err := rule.Build(r.ohm, r.dispatcher)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 		balancer.InjectContext(r.ctx)
-		newBalancers[rule.Tag] = balancer
+		added[rule.Tag] = balancer
 	}
 
+	rules := make([]*Rule, 0, len(config.Rule))
+	seen := make(map[string]bool, len(config.Rule))
+	fail := func(err error) ([]*Rule, map[string]*Balancer, error) {
+		closeWebhooks(rules)
+		return nil, nil, err
+	}
 	for _, rule := range config.Rule {
 		cond, err := rule.BuildCondition()
 		if err != nil {
-			return err
+			return fail(err)
 		}
 		rr := &Rule{
-			Condition: cond,
-			Tag:       rule.GetTag(),
-			RuleTag:   rule.GetRuleTag(),
+			Condition:    cond,
+			Tag:          rule.GetTag(),
+			RuleTag:      rule.GetRuleTag(),
+			UserEmail:    rule.GetUserEmail(),
+			InboundTag:   rule.GetInboundTag(),
+			userKeys:     pureUserKeys(rule),
+			nativeConfig: proto.Clone(rule).(*RoutingRule),
 		}
-		if rr.RuleTag != "" && existTags[rr.RuleTag] {
-			return errors.New("duplicate ruleTag ", rr.RuleTag)
+		if rr.RuleTag != "" && (existTags[rr.RuleTag] || seen[rr.RuleTag]) {
+			return fail(errors.New("duplicate ruleTag ", rr.RuleTag))
 		}
-		existTags[rr.RuleTag] = true
+		seen[rr.RuleTag] = true
 		if wh := rule.GetWebhook(); wh != nil {
 			notifier, err := NewWebhookNotifier(wh)
 			if err != nil {
-				return err
+				return fail(err)
 			}
 			rr.Webhook = notifier
 		}
 		if btag := rule.GetBalancingTag(); len(btag) > 0 {
-			brule, found := newBalancers[btag]
+			brule, found := added[btag]
 			if !found {
-				return errors.New("balancer ", btag, " not found")
+				brule, found = balancers[btag]
+			}
+			if !found {
+				closeWebhooks([]*Rule{rr})
+				return fail(errors.New("balancer ", btag, " not found"))
 			}
 			rr.Balancer = brule
 		}
-		newRules = append(newRules, rr)
+		rules = append(rules, rr)
 	}
-
-	r.balancers.Store(&newBalancers)
-	r.rules.Store(&newRules)
-	if !shouldAppend {
-		closeWebhooks(oldRules)
-	}
-	return nil
+	return rules, added, nil
 }
 
 // RemoveRule implements routing.Router.
@@ -164,7 +254,7 @@ func (r *Router) RemoveRule(tag string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	oldRules := *r.rules.Load()
+	oldRules := r.rules.Load().all
 	newRules := make([]*Rule, 0, len(oldRules))
 	var removed []*Rule
 	for _, rule := range oldRules {
@@ -174,22 +264,82 @@ func (r *Router) RemoveRule(tag string) error {
 			removed = append(removed, rule)
 		}
 	}
-	r.rules.Store(&newRules)
+	r.rules.Store(newRuleSet(newRules))
 	closeWebhooks(removed)
 	return nil
 }
 
 // ListRule implements routing.Router
 func (r *Router) ListRule() []routing.Route {
-	rules := *r.rules.Load()
+	rules := r.rules.Load().all
 	ruleList := make([]routing.Route, 0, len(rules))
 	for _, rule := range rules {
 		ruleList = append(ruleList, &Route{
 			outboundTag: rule.Tag,
 			ruleTag:     rule.RuleTag,
+			userEmail:   rule.UserEmail,
+			inboundTag:  rule.InboundTag,
 		})
 	}
 	return ruleList
+}
+
+// ReplaceRule validates first, then publishes one snapshot without a gap in guards.
+func (r *Router) ReplaceRule(message *serial.TypedMessage) error {
+	value, err := message.GetInstance()
+	if err != nil {
+		return err
+	}
+	config, ok := value.(*Config)
+	if !ok || len(config.Rule) != 1 || config.Rule[0].RuleTag == "" || len(config.BalancingRule) != 0 {
+		return errors.New("replacement needs one named rule")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	old := r.rules.Load().all
+	tag := config.Rule[0].RuleTag
+	existing := make(map[string]bool, len(old))
+	for _, rule := range old {
+		if rule.RuleTag != tag {
+			existing[rule.RuleTag] = true
+		}
+	}
+	added, _, err := r.buildConfig(config, *r.balancers.Load(), existing)
+	if err != nil {
+		return err
+	}
+	next := make([]*Rule, 0, len(old)+1)
+	replaced := false
+	removed := []*Rule{}
+	for _, rule := range old {
+		if rule.RuleTag == tag {
+			next = append(next, added[0])
+			removed = append(removed, rule)
+			replaced = true
+		} else {
+			next = append(next, rule)
+		}
+	}
+	if !replaced {
+		next = append(next, added[0])
+	}
+	r.rules.Store(newRuleSet(next))
+	closeWebhooks(removed)
+	return nil
+}
+
+func (r *Router) RuleConfigByTag() map[string][]byte {
+	result := make(map[string][]byte)
+	for _, rule := range r.rules.Load().all {
+		if rule.nativeConfig == nil {
+			continue
+		}
+		value, err := proto.MarshalOptions{Deterministic: true}.Marshal(rule.nativeConfig)
+		if err == nil {
+			result[rule.RuleTag] = value
+		}
+	}
+	return result
 }
 
 func (r *Router) pickRouteInternal(ctx routing.Context) (*Rule, routing.Context, error) {
@@ -202,12 +352,10 @@ func (r *Router) pickRouteInternal(ctx routing.Context) (*Rule, routing.Context,
 		ctx = routing_dns.ContextWithDNSClient(ctx, r.dns)
 	}
 
-	rules := *r.rules.Load()
+	rules := r.rules.Load()
 
-	for _, rule := range rules {
-		if rule.Apply(ctx) {
-			return rule, ctx, nil
-		}
+	if rule := rules.pick(ctx); rule != nil {
+		return rule, ctx, nil
 	}
 
 	if r.domainStrategy != Config_IpIfNonMatch || len(ctx.GetTargetDomain()) == 0 || skipDNSResolve {
@@ -217,10 +365,8 @@ func (r *Router) pickRouteInternal(ctx routing.Context) (*Rule, routing.Context,
 	ctx = routing_dns.ContextWithDNSClient(ctx, r.dns)
 
 	// Try applying rules again if we have IPs.
-	for _, rule := range rules {
-		if rule.Apply(ctx) {
-			return rule, ctx, nil
-		}
+	if rule := rules.pick(ctx); rule != nil {
+		return rule, ctx, nil
 	}
 
 	return nil, ctx, common.ErrNoClue
@@ -254,7 +400,7 @@ func (r *Router) Close() error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	closeWebhooks(*r.rules.Load())
+	closeWebhooks(r.rules.Load().all)
 	return nil
 }
 
@@ -275,6 +421,29 @@ func (r *Route) GetOutboundTag() string {
 
 func (r *Route) GetRuleTag() string {
 	return r.ruleTag
+}
+
+// GetUser and GetInboundTag are promoted from the embedded routing.Context,
+// which is nil for the Routes ListRule builds; answer from the rule instead of
+// panicking on the nil interface.
+func (r *Route) GetUser() string {
+	if r.Context != nil {
+		return r.Context.GetUser()
+	}
+	if len(r.userEmail) == 0 {
+		return ""
+	}
+	return r.userEmail[0]
+}
+
+func (r *Route) GetInboundTag() string {
+	if r.Context != nil {
+		return r.Context.GetInboundTag()
+	}
+	if len(r.inboundTag) == 0 {
+		return ""
+	}
+	return r.inboundTag[0]
 }
 
 func init() {
