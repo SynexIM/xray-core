@@ -179,10 +179,11 @@ func (r *Recorder) emit(rec Record) {
 	}
 }
 
-// tick 每隔 interim 给已连满一个窗口的长连接补一条中间记录。
+// tick 给已连满一个窗口的长连接补一条中间记录。扫描间隔是窗口的六分之一：
+// 按窗口长度扫描的话，刚错过一次扫描的连接要等将近两个窗口才有第一条记录。
 func (r *Recorder) tick() {
 	defer r.done.Done()
-	t := time.NewTicker(r.interim)
+	t := time.NewTicker(r.interim / 6)
 	defer t.Stop()
 	for {
 		select {
