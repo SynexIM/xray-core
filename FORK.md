@@ -36,6 +36,8 @@ proxy/http/users.go         给 http 协议补上客户端（email）管理
 
 ## 改动（在上游文件里加东西）
 
+SOCKS BIND：v26.10.10 上游已在 `proxy/socks/protocol.go` 拒绝 CMD=2，回复 RFC 1928 0x07；保留握手层实现，不加配置开关。`proxy/socks/bind_test.go` 覆盖认证/无认证、UDP 开关组合、0.0.0.0:0 占位，观察系统监听器确认没有开端口；UDP ASSOCIATE 不改。
+
 | 文件 | 加了什么 |
 |---|---|
 | `common/protocol/user.proto` | 顶层限速、连接数、`committed_bps` / `committed_burst_bytes`、`class`；另收敛 Nodus/IPNex 的方向限速字段与 `egress_tag`（字段 9–15） |

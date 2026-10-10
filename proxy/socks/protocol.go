@@ -177,6 +177,8 @@ func (s *ServerSession) handshake5(nMethod byte, reader io.Reader, writer net.Co
 		}
 		request.Command = protocol.RequestCommandUDP
 	case cmdTCPBind:
+		// Reject before reading the placeholder destination or creating listeners.
+		// RFC 1928 BIND is deliberately unavailable; UDP ASSOCIATE stays separate.
 		writeSocks5Response(writer, statusCmdNotSupport, net.AnyIP, net.Port(0))
 		return nil, nil, errors.New("TCP bind is not supported.")
 	default:
