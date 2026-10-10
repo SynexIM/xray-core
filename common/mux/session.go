@@ -259,5 +259,5 @@ func init() {
 // rate-limit wrapper around it both provide it.
 type xudpInput interface {
 	ReturnAnError(error)
-	Recover()
+	Recover() error
 }

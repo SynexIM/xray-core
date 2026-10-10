@@ -774,7 +774,7 @@ func CopyRawConnIfExist(ctx context.Context, readerConn net.Conn, writerConn net
 	if inbound == nil || inbound.CanSpliceCopy == 3 {
 		return readV(ctx, reader, writer, timer, readCounter)
 	}
-	if inbound.DisableSplice {
+	if session.SpliceDisabled(ctx) {
 		return readV(ctx, reader, writer, timer, readCounter)
 	}
 	outbounds := session.OutboundsFromContext(ctx)
@@ -838,7 +838,7 @@ func CopyRawConnIfExist(ctx context.Context, readerConn net.Conn, writerConn net
 
 func outboundRequiresBufferedCopy(outbounds []*session.Outbound) bool {
 	for _, ob := range outbounds {
-		if ob.CanSpliceCopy == 3 || ob.ForceBufferedCopy {
+		if ob.CanSpliceCopy == 3 {
 			return true
 		}
 	}

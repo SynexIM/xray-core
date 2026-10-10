@@ -24,7 +24,11 @@ func TestUserStoreAddRemoveRoundTrip(t *testing.T) {
 	store := http.NewUserStore[*http.UserAccount](0, nil, nil)
 
 	add := func(_ uint64) *protocol.MemoryUser {
-		u := &protocol.MemoryUser{Email: "carol"}
+		account, err := (&http.Account{Username: "carol-login", Password: "test-only"}).AsAccount()
+		if err != nil {
+			t.Fatal(err)
+		}
+		u := &protocol.MemoryUser{Email: "carol", Account: account}
 		if err := store.Add(u); err != nil {
 			t.Fatalf("Add: %v", err)
 		}
@@ -32,22 +36,37 @@ func TestUserStoreAddRemoveRoundTrip(t *testing.T) {
 	}
 
 	first := add(500)
-	got, ok := store.Authenticate("carol", "")
+	got, ok := store.Authenticate("carol-login", "test-only")
 	if !ok || got != first {
 		t.Fatal("after Add, authenticate should return the added user")
 	}
 
 	store.Remove("carol")
-	if _, ok := store.Authenticate("carol", ""); ok {
+	if _, ok := store.Authenticate("carol-login", "test-only"); ok {
 		t.Fatal("after Remove, user must not authenticate")
 	}
 
 	second := add(900)
-	got, ok = store.Authenticate("carol", "")
+	got, ok = store.Authenticate("carol-login", "test-only")
 	if !ok || got != second || got == first {
 		t.Fatal("re-added user must be the new instance with new identity")
 	}
 
+}
+
+func TestBootUsernameDoesNotInventEmail(t *testing.T) {
+	store := http.NewUserStore[*http.UserAccount](2, map[string]string{"login": "test-only"}, nil)
+	identity, ok := store.Authenticate("login", "test-only")
+	if !ok || identity.Email != "" {
+		t.Fatalf("认证名被伪造成 email: %+v", identity)
+	}
+}
+
+func TestRuntimeIdentityDoesNotBecomeCredential(t *testing.T) {
+	store := http.NewUserStore[*http.UserAccount](0, nil, nil)
+	if err := store.Add(&protocol.MemoryUser{Email: "identity"}); err == nil {
+		t.Fatal("缺少用户名却回退到 email")
+	}
 }
 
 func TestUserStoreRuntimeAddUsesAccountUsernameForAuthAndEmailForLookup(t *testing.T) {

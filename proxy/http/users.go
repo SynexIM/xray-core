@@ -77,12 +77,11 @@ func (s *UserStore) setRuntime(username, password string, u *protocol.MemoryUser
 		return
 	}
 	u.Level = s.level
-	if u.Email == "" {
-		u.Email = username
-	}
 	s.users[username] = u
 	s.password[username] = password
-	s.emailKey[u.Email] = username
+	if u.Email != "" {
+		s.emailKey[u.Email] = username
+	}
 }
 
 // Empty reports whether the store has no users (anonymous inbound).
@@ -109,9 +108,6 @@ func (s *UserStore) Add(u *protocol.MemoryUser) error {
 	}
 	username := accountUsername(u)
 	if username == "" {
-		username = u.Email
-	}
-	if username == "" {
 		return errUserMissingUsername
 	}
 	s.mu.Lock()
@@ -132,9 +128,6 @@ func (s *UserStore) Update(u *protocol.MemoryUser) error {
 		return errUserMissingEmail
 	}
 	username := accountUsername(u)
-	if username == "" {
-		username = u.Email
-	}
 	if username == "" {
 		return errUserMissingUsername
 	}

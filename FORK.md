@@ -327,6 +327,10 @@ go build ./... && go test ./app/... ./common/... ./proxy/... ./infra/conf/...
 This fork is published separately from the upstream XTLS release channel. The upstream MPL-2.0 license and copyright notices remain in force. See [RELEASE.md](RELEASE.md) for the tag, artifact, container, compatibility, and rollback requirements.
 # 2026-10-10 限速接口重塑（当前状态）
 
+节点用量按每条 link 记一次，不把多规则命中重复计入利用率。启用 limit 模块的未命中连接也经过无桶的计量包装，保持不限速；为避免 splice 绕过节点计量（尤其 SetNode 热开时的旧连接），这些连接同样留在用户态。完全不加载 limit 时保持上游 splice 路径。
+
+运行时由 app/limit 持有每条规则的上下行阶梯桶、连接/IP 表和拥挤调度。dispatcher 路由后通过 features/limit.Limiter 挂载：该 link 的上行是 Reader、下行是 Writer，包装保留 UDP/XUDP 边界和关闭接口。命中规则的会话用原子标记禁用 Vision splice；User 的会话管理已移到按 email 的表，弱身份键保留删除竞态保护。规则替换只改变新连接；profile 参数原地更新，对存量连接下一片生效。
+
 app/limit 的配置集中描述上下行速率阶梯、规则匹配、节点容量及拥挤参数。JSON 的 limit 段采用带单位速率和 Go 时长；阶梯、重复名称、规则条件和 profile 引用在 Build 时校验，protobuf 一律使用 bit/s 与毫秒。Hysteria 既有带宽解析采用二进制倍率（1mbps = 1048576 bit/s）；精确十进制速率可写 1000000bps。
 
 User 已回到 `{level,email,account}`；历史限速字段号和名字保留为 reserved。删除旧整形器、节点公平服务、出口共享上限操作及协议账户上的限速字段；固定出口改由路由负责。保留凭据更新、批量装卸、入站 drain/resume、运行时 HTTP/SOCKS 账户、访问日志和 reverse 管理。下面涉及旧限速字段的描述仅为迁移历史，不再代表当前接口；新执行器在后续组引入 app/limit。

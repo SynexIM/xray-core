@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"sync/atomic"
 	_ "unsafe"
 
 	"github.com/xtls/xray-core/common/ctx"
@@ -28,10 +29,26 @@ const (
 	mitmServerNameKey         ctx.SessionKey = 12 // used by TLS dialer
 
 	streamSettingsKey ctx.SessionKey = 13
+	spliceDisabledKey ctx.SessionKey = 14
 )
 
 func ContextWithInbound(ctx context.Context, inbound *Inbound) context.Context {
+	// Vision 保留外层上下文；子流挂载后必须能通过同一标记通知外层。
+	if _, ok := ctx.Value(spliceDisabledKey).(*atomic.Bool); !ok {
+		ctx = context.WithValue(ctx, spliceDisabledKey, new(atomic.Bool))
+	}
 	return context.WithValue(ctx, inboundSessionKey, inbound)
+}
+
+func DisableSplice(ctx context.Context) {
+	if marker, ok := ctx.Value(spliceDisabledKey).(*atomic.Bool); ok {
+		marker.Store(true)
+	}
+}
+
+func SpliceDisabled(ctx context.Context) bool {
+	marker, _ := ctx.Value(spliceDisabledKey).(*atomic.Bool)
+	return marker != nil && marker.Load()
 }
 
 func InboundFromContext(ctx context.Context) *Inbound {

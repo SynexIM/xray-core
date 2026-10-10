@@ -15,6 +15,7 @@ import (
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/dns"
+	featurelimit "github.com/xtls/xray-core/features/limit"
 	"github.com/xtls/xray-core/features/outbound"
 	"github.com/xtls/xray-core/features/policy"
 	"github.com/xtls/xray-core/features/routing"
@@ -99,17 +100,21 @@ func (r *cachedReader) Interrupt() {
 
 // DefaultDispatcher is a default implementation of Dispatcher.
 type DefaultDispatcher struct {
-	ohm    outbound.Manager
-	router routing.Router
-	policy policy.Manager
-	stats  stats.Manager
-	fdns   dns.FakeDNSEngine
+	ohm     outbound.Manager
+	router  routing.Router
+	policy  policy.Manager
+	stats   stats.Manager
+	fdns    dns.FakeDNSEngine
+	limiter featurelimit.Limiter
 }
 
 func init() {
 	common.Must(common.RegisterConfig((*Config)(nil), func(ctx context.Context, config interface{}) (interface{}, error) {
 		d := new(DefaultDispatcher)
 		if err := core.RequireFeatures(ctx, func(om outbound.Manager, router routing.Router, pm policy.Manager, sm stats.Manager, dc dns.Client) error {
+			if err := core.OptionalFeatures(ctx, func(l featurelimit.Limiter) { d.limiter = l }); err != nil {
+				return err
+			}
 			core.OptionalFeatures(ctx, func(fdns dns.FakeDNSEngine) {
 				d.fdns = fdns
 			})
@@ -547,6 +552,11 @@ func sniffer(ctx context.Context, cReader *cachedReader, metadataOnly bool, netw
 }
 
 func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.Link, destination net.Destination) {
+	if d.limiter != nil {
+		managed, cancel := context.WithCancel(ctx)
+		ctx = managed
+		defer cancel()
+	}
 	if inbound := session.InboundFromContext(ctx); inbound != nil && inbound.User != nil {
 		managed, cancel := context.WithCancel(ctx)
 		ctx = managed
@@ -623,6 +633,34 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 	}
 
 	ob.Tag = handler.Tag()
+	if d.limiter != nil {
+		info := featurelimit.SessionInfo{OutboundTag: ob.Tag, Datagram: destination.Network == net.Network_UDP}
+		if inbound := session.InboundFromContext(ctx); inbound != nil {
+			info.InboundTag = inbound.Tag
+			if inbound.User != nil {
+				info.Email = inbound.User.Email
+			}
+			if inbound.Source.Address != nil {
+				info.SourceIP = inbound.Source.Address.String()
+			}
+		}
+		up, down, release, err := d.limiter.Attach(ctx, info)
+		if err != nil {
+			errors.LogWarningInner(ctx, err, "limit admission rejected")
+			session.SubmitOutboundErrorToOriginator(ctx, err)
+			common.Interrupt(link.Reader)
+			common.Interrupt(link.Writer)
+			return
+		}
+		defer release()
+		// 路由后的 link 上行是 Reader，下行是 Writer，两个入口在此一次挂齐。
+		if up != nil {
+			link.Reader = up(link.Reader)
+		}
+		if down != nil {
+			link.Writer = down(link.Writer)
+		}
+	}
 	if accessMessage := log.AccessMessageFromContext(ctx); accessMessage != nil {
 		if tag := handler.Tag(); tag != "" {
 			if inTag == "" {
