@@ -13,6 +13,7 @@ module 名保持 `github.com/xtls/xray-core` 不变——3x-ui 通过 `go.mod` �
 
 - `app/policy/command/`：PolicyService.SetLevels 整份替换 levels，GetLevels 返回有效值的独立副本；manager 用 atomic 指针发布不可变快照，新连接读新策略，已建连接保持原 Session。CLI：`xray api policy set|get`，set 接受含 `levels` 的 policy JSON 对象。
 - `app/capability/`：模块自行 Register 能力，并发安全、去重、排序；CapabilityService.Get 与 `xray api capability` 返回版本和能力。构建发布版加 `-ldflags '-X github.com/xtls/xray-core/app/capability.Release=synexim.1'`，得到 `26.10.10-synexim.1`；不注入时只返回 core.Version()。本路登记 `policy.hotReload`、`api.batch`、`inbound.drain`，`limit` 由限速模块登记。
+- `main/commands/base/execute.go`：命令后单独的 `--help` / `-h` 复用已有 Help 路径并成功退出，让分组命令与 CustomFlags 命令的帮助检查可用；不传帮助参数时保持原执行路径。
 
 运行账号热更新：没有 `UserUpdater` 的协议在凭据、Level、Pool 不变时，
 由命令层原子发布不可变运行参数快照；序列化读回、方向限速、池整形、

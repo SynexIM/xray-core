@@ -32,6 +32,10 @@ BigCmdLoop:
 			if cmd.Name() != args[0] {
 				continue
 			}
+			if len(args) == 2 && (args[1] == "--help" || args[1] == "-h") {
+				Help(os.Stdout, strings.Split(cmdName, " "))
+				return
+			}
 			if len(cmd.Commands) > 0 {
 				// test sub commands
 				bigCmd = cmd
