@@ -1,0 +1,31 @@
+{
+  // 192.0.2.10/11 是文档地址，部署前替换为节点实际拥有的出口 IP。
+  // 每个 IP 一个 Mixed 入站和一个 freedom 出站，凭据各自独立；管理 API 只走 unix socket。
+  "log": { "loglevel": "warning" },
+  "api": {
+    "tag": "api",
+    "listen": "/run/xray/api.sock",
+    "services": ["HandlerService", "RoutingService", "StatsService", "PolicyService", "CapabilityService", "LimitService"]
+  },
+  // LimitService 等甲路合并后可用；此处暂不放 limit 段。
+  "stats": {},
+  "policy": { "levels": { "1": { "connIdle": 300, "statsUserUplink": true, "statsUserDownlink": true } } },
+  "inbounds": [
+    {
+      "tag": "ip-001-mixed", "listen": "0.0.0.0", "port": 11001, "protocol": "mixed",
+      "settings": { "auth": "password", "accounts": [{ "user": "replace-ip-001-user", "pass": "REPLACE_WITH_IP_001_PASSWORD", "email": "ip-001-mixed" }], "udp": true, "userLevel": 1 }
+    },
+    {
+      "tag": "ip-002-mixed", "listen": "0.0.0.0", "port": 11002, "protocol": "mixed",
+      "settings": { "auth": "password", "accounts": [{ "user": "replace-ip-002-user", "pass": "REPLACE_WITH_IP_002_PASSWORD", "email": "ip-002-mixed" }], "udp": true, "userLevel": 1 }
+    }
+  ],
+  "outbounds": [
+    { "tag": "ip-001-egress", "protocol": "freedom", "sendThrough": "192.0.2.10", "settings": { "domainStrategy": "ForceIPv4" } },
+    { "tag": "ip-002-egress", "protocol": "freedom", "sendThrough": "192.0.2.11", "settings": { "domainStrategy": "ForceIPv4" } }
+  ],
+  "routing": { "rules": [
+    { "type": "field", "inboundTag": ["ip-001-mixed"], "outboundTag": "ip-001-egress" },
+    { "type": "field", "inboundTag": ["ip-002-mixed"], "outboundTag": "ip-002-egress" }
+  ] }
+}

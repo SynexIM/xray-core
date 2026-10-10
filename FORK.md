@@ -38,6 +38,8 @@ proxy/http/users.go         给 http 协议补上客户端（email）管理
 
 SOCKS BIND：v26.10.10 上游已在 `proxy/socks/protocol.go` 拒绝 CMD=2，回复 RFC 1928 0x07；保留握手层实现，不加配置开关。`proxy/socks/bind_test.go` 覆盖认证/无认证、UDP 开关组合、0.0.0.0:0 占位，观察系统监听器确认没有开端口；UDP ASSOCIATE 不改。
 
+部署示例：`deploy/examples/node-line.json` 的四协议 TCP 入站默认 `acceptProxyProtocol: true`，前面有中转必须开并要求中转发送 PROXY protocol；限制中转源地址，UDP 不经 PROXY protocol。`node-ip.json` 每 IP 一组 Mixed → freedom，明确 `sendThrough` 与 `ForceIPv4`。两例 API 只监听 `/run/xray/api.sock`，Compose host 网络的 xray/agent 共享 `/run/xray`，agent 镜像由下一个 change 提供。配置凭据均为占位，REALITY 私钥需运行 `xray x25519` 后填入；LimitService 等限速分支合并，示例暂不含 limit 段。
+
 | 文件 | 加了什么 |
 |---|---|
 | `common/protocol/user.proto` | 顶层限速、连接数、`committed_bps` / `committed_burst_bytes`、`class`；另收敛 Nodus/IPNex 的方向限速字段与 `egress_tag`（字段 9–15） |

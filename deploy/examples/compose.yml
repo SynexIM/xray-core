@@ -1,0 +1,21 @@
+services:
+  xray:
+    image: synexim/xray:26.10.10-synexim.1
+    network_mode: host
+    restart: unless-stopped
+    command: ["run", "-c", "/etc/xray/config.json"]
+    volumes:
+      # 换成 node-ip.json 可运行 IP 节点；先替换配置中的凭据与地址占位。
+      - ./node-line.json:/etc/xray/config.json:ro
+      - xray-run:/run/xray
+  agent:
+    image: proxyastra-agent:dev # 下一个 change 提供
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - xray
+    volumes:
+      - xray-run:/run/xray
+    # agent 的启动参数与鉴权配置由下一个 change 提供；Xray gRPC 地址为 unix:///run/xray/api.sock。
+volumes:
+  xray-run:
