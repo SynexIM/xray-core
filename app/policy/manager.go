@@ -2,6 +2,9 @@ package policy
 
 import (
 	"context"
+	"sync/atomic"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/features/policy"
@@ -9,23 +12,43 @@ import (
 
 // Instance is an instance of Policy manager.
 type Instance struct {
-	levels map[uint32]*Policy
+	levels atomic.Pointer[levelSnapshot]
 	system *SystemPolicy
+}
+
+type levelSnapshot struct {
+	levels map[uint32]*Policy
+}
+
+// SetLevels replaces the entire level table. Published policies are immutable.
+func (m *Instance) SetLevels(levels map[uint32]*Policy) {
+	snapshot := &levelSnapshot{levels: make(map[uint32]*Policy, len(levels))}
+	for level, p := range levels {
+		pp := defaultPolicy()
+		if p != nil {
+			pp.overrideWith(proto.Clone(p).(*Policy))
+		}
+		snapshot.levels[level] = pp
+	}
+	m.levels.Store(snapshot)
+}
+
+// GetLevels returns a detached copy of the effective level table.
+func (m *Instance) GetLevels() map[uint32]*Policy {
+	snapshot := m.levels.Load()
+	levels := make(map[uint32]*Policy, len(snapshot.levels))
+	for level, p := range snapshot.levels {
+		levels[level] = proto.Clone(p).(*Policy)
+	}
+	return levels
 }
 
 // New creates new Policy manager instance.
 func New(ctx context.Context, config *Config) (*Instance, error) {
 	m := &Instance{
-		levels: make(map[uint32]*Policy),
 		system: config.System,
 	}
-	if len(config.Level) > 0 {
-		for lv, p := range config.Level {
-			pp := defaultPolicy()
-			pp.overrideWith(p)
-			m.levels[lv] = pp
-		}
-	}
+	m.SetLevels(config.Level)
 
 	return m, nil
 }
@@ -37,7 +60,7 @@ func (*Instance) Type() interface{} {
 
 // ForLevel implements policy.Manager.
 func (m *Instance) ForLevel(level uint32) policy.Session {
-	if p, ok := m.levels[level]; ok {
+	if p, ok := m.levels.Load().levels[level]; ok {
 		return p.ToCorePolicy()
 	}
 	return policy.SessionDefault()

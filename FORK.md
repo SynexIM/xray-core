@@ -11,6 +11,8 @@ module 名保持 `github.com/xtls/xray-core` 不变——3x-ui 通过 `go.mod` �
 
 ## 新增（上游完全没有的东西）
 
+- `app/policy/command/`：PolicyService.SetLevels 整份替换 levels，GetLevels 返回有效值的独立副本；manager 用 atomic 指针发布不可变快照，新连接读新策略，已建连接保持原 Session。CLI：`xray api policy set|get`，set 接受含 `levels` 的 policy JSON 对象。
+
 运行账号热更新：没有 `UserUpdater` 的协议在凭据、Level、Pool 不变时，
 由命令层原子发布不可变运行参数快照；序列化读回、方向限速、池整形、
 连接上限与新连接固定出口读取同一快照，不写正在被认证/连接读取的字段。

@@ -11,6 +11,7 @@ var CmdAPI = &base.Command{
 	Long: `{{.Exec}} {{.LongName}} provides tools to manipulate Xray via its API.
 `,
 	Commands: []*base.Command{
+		cmdPolicy,
 		cmdRestartLogger,
 		cmdGetStats,
 		cmdQueryStats,
