@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 
+	"github.com/xtls/xray-core/app/capability"
 	"github.com/xtls/xray-core/app/commander"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/errors"
@@ -462,6 +463,8 @@ func (s *service) Register(server *grpc.Server) {
 }
 
 func init() {
+	capability.Register("api.batch")
+	capability.Register("inbound.drain")
 	common.Must(common.RegisterConfig((*Config)(nil), func(ctx context.Context, cfg interface{}) (interface{}, error) {
 		s := core.MustFromContext(ctx)
 		return &service{v: s}, nil

@@ -1,0 +1,10 @@
+syntax = "proto3";
+package xray.app.capability.command;
+option go_package = "github.com/xtls/xray-core/app/capability/command";
+message GetRequest {}
+message GetResponse {
+  string version = 1;
+  repeated string capabilities = 2;
+}
+service CapabilityService { rpc Get(GetRequest) returns (GetResponse); }
+message Config {}
