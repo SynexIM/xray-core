@@ -3,7 +3,6 @@ package protocol
 import (
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/serial"
-	"sync/atomic"
 )
 
 func (u *User) GetTypedAccount() (Account, error) {
@@ -34,29 +33,11 @@ func (u *User) ToMemoryUser() (*MemoryUser, error) {
 	return mu, nil
 }
 
-// RuntimeMemoryUser copies identity and every runtime limit without parsing the
-// account; mixed/socks boot accounts keep credentials outside protocol.User.
+// 静态 HTTP/SOCKS 凭据由入站管理，只在此复制身份。
 func (u *User) RuntimeMemoryUser() *MemoryUser {
 	return &MemoryUser{
-		Email:                u.Email,
-		Level:                u.Level,
-		BandwidthBps:         u.BandwidthBps,
-		ConnLimit:            u.ConnLimit,
-		CommittedBps:         u.CommittedBps,
-		CommittedBurstBytes:  u.CommittedBurstBytes,
-		Class:                u.Class,
-		UploadBandwidthBps:   u.UploadBandwidthBps,
-		UploadPeakBps:        u.UploadPeakBps,
-		UploadBurstBytes:     u.UploadBurstBytes,
-		DownloadBandwidthBps: u.DownloadBandwidthBps,
-		DownloadPeakBps:      u.DownloadPeakBps,
-		DownloadBurstBytes:   u.DownloadBurstBytes,
-		EgressTag:            u.EgressTag,
-		BurstBitPerSec:       u.BurstBitPerSec,
-		BurstCreditBytes:     u.BurstCreditBytes,
-		SustainedBitPerSec:   u.SustainedBitPerSec,
-		EnduranceBytes:       u.EnduranceBytes,
-		Pool:                 u.Pool,
+		Email: u.Email,
+		Level: u.Level,
 	}
 }
 
@@ -65,31 +46,11 @@ func ToProtoUser(mu *MemoryUser) *User {
 		return nil
 	}
 	account := mu.Account
-	mu = mu.RuntimeConfig()
 	u := &User{
-		Email:                mu.Email,
-		Level:                mu.Level,
-		BandwidthBps:         mu.BandwidthBps,
-		ConnLimit:            mu.ConnLimit,
-		CommittedBps:         mu.CommittedBps,
-		CommittedBurstBytes:  mu.CommittedBurstBytes,
-		Class:                mu.Class,
-		UploadBandwidthBps:   mu.UploadBandwidthBps,
-		UploadPeakBps:        mu.UploadPeakBps,
-		UploadBurstBytes:     mu.UploadBurstBytes,
-		DownloadBandwidthBps: mu.DownloadBandwidthBps,
-		DownloadPeakBps:      mu.DownloadPeakBps,
-		DownloadBurstBytes:   mu.DownloadBurstBytes,
-		EgressTag:            mu.EgressTag,
-		BurstBitPerSec:       mu.BurstBitPerSec,
-		BurstCreditBytes:     mu.BurstCreditBytes,
-		SustainedBitPerSec:   mu.SustainedBitPerSec,
-		EnduranceBytes:       mu.EnduranceBytes,
-		Pool:                 mu.Pool,
+		Email: mu.Email,
+		Level: mu.Level,
 	}
-	// Account 可以没有：socks/http/mixed 这类静态入站会把用户表示成一个
-	// 只带限速的 MemoryUser，密码另外放。序列化回去时必须容忍这一点，
-	// 直接解引用会在这条路径上 panic。
+	// 启动身份的凭据可能由入站单独管理。
 	if account != nil {
 		u.Account = serial.ToTypedMessage(account.ToProto())
 	}
@@ -98,41 +59,7 @@ func ToProtoUser(mu *MemoryUser) *User {
 
 // MemoryUser is a parsed form of User, to reduce number of parsing of Account proto.
 type MemoryUser struct {
-	runtimeSessions atomic.Pointer[userSessions]
-	runtimeConfig   atomic.Pointer[MemoryUser]
-	runtimeSource   *MemoryUser
-	// Account is the parsed account of the protocol.
-	Account      Account
-	Email        string
-	Level        uint32
-	BandwidthBps uint64
-	ConnLimit    uint32
-	// Symmetric PIR/CIR/CBS limits. These remain the source of truth whenever
-	// no directional field is set.
-	CommittedBps        uint64
-	CommittedBurstBytes uint64
-
-	// Directional limits use independent committed/peak/burst buckets. Their
-	// presence switches only per-user shaping; class/fair scheduling remains
-	// orthogonal.
-	UploadBandwidthBps   uint64
-	UploadPeakBps        uint64
-	UploadBurstBytes     uint64
-	DownloadBandwidthBps uint64
-	DownloadPeakBps      uint64
-	DownloadBurstBytes   uint64
-
-	// EgressTag pins this authenticated user to an outbound. Empty routes normally.
-	EgressTag string
-
-	// Class names the contention parameter group (node_fairshare.go).
-	Class string
-
-	// Pool shaping on top of the directional standard rate; see tier_shaper.go.
-	BurstBitPerSec     uint64
-	BurstCreditBytes   uint64
-	SustainedBitPerSec uint64
-	EnduranceBytes     uint64
-	// Pool names the shaping pool shared by every user object that carries it.
-	Pool string
+	Account Account
+	Email   string
+	Level   uint32
 }

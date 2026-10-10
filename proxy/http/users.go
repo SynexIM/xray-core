@@ -33,13 +33,7 @@ func accountUsername(u *protocol.MemoryUser) string {
 	return ""
 }
 
-// UserStore is an in-memory, concurrency-safe username->user table shared by the
-// http and (via embedding) mixed/socks inbounds. It is the per-user limit carrier
-// those static proxies historically lacked: authentication returns a single
-// stable *protocol.MemoryUser per username, so the dispatcher's bandwidth, fair-
-// share and connection-cap enforcement (all keyed off the *MemoryUser instance)
-// apply to mixed exactly as they do to vless. It also backs proxy.UserManager so
-// users can be added/removed at runtime without rebuilding the inbound.
+// UserStore 让 HTTP 与 SOCKS 共用身份表，凭据按用户名认证，管理按 email 定位。
 type UserStore struct {
 	mu       sync.RWMutex
 	level    uint32
@@ -48,25 +42,15 @@ type UserStore struct {
 	emailKey map[string]string               // email -> username
 }
 
-// LimitedAccount is the shape of a boot-time user account carrying per-user
-// limits. Both http.UserAccount and socks.UserAccount satisfy it, so NewUserStore
-// can build a shared store for the mixed inbound without importing socks (which
-// would create a cycle).
-type LimitedAccount interface {
+// 两个协议共用启动账户的最小接口，避免循环导入。
+type BootAccount interface {
 	GetUsername() string
 	GetPassword() string
-	GetBandwidthBps() uint64
-	GetConnLimit() uint32
-	GetCommittedBps() uint64
-	GetCommittedBurstBytes() uint64
-	GetClass() string
 	GetRuntime() *protocol.User
 }
 
-// NewUserStore builds a store from boot accounts. level is the inbound user
-// level applied to every user. accounts is the legacy username->password map
-// (no limits); userAccounts carries per-user limits and takes precedence.
-func NewUserStore[T LimitedAccount](level uint32, accounts map[string]string, userAccounts []T) *UserStore {
+// 显式身份账户优先于旧的用户名密码映射。
+func NewUserStore[T BootAccount](level uint32, accounts map[string]string, userAccounts []T) *UserStore {
 	s := &UserStore{
 		level:    level,
 		users:    make(map[string]*protocol.MemoryUser),
@@ -74,49 +58,16 @@ func NewUserStore[T LimitedAccount](level uint32, accounts map[string]string, us
 		emailKey: make(map[string]string),
 	}
 	for username, password := range accounts {
-		s.set(username, password, limits{})
+		s.setRuntime(username, password, &protocol.MemoryUser{})
 	}
 	for _, ua := range userAccounts {
 		if rt := ua.GetRuntime(); rt != nil {
 			s.setRuntime(ua.GetUsername(), ua.GetPassword(), rt.RuntimeMemoryUser())
 			continue
 		}
-		s.set(ua.GetUsername(), ua.GetPassword(), limits{
-			bandwidthBps:        ua.GetBandwidthBps(),
-			connLimit:           ua.GetConnLimit(),
-			committedBps:        ua.GetCommittedBps(),
-			committedBurstBytes: ua.GetCommittedBurstBytes(),
-			class:               ua.GetClass(),
-		})
+		s.setRuntime(ua.GetUsername(), ua.GetPassword(), &protocol.MemoryUser{})
 	}
 	return s
-}
-
-// limits 把一个用户的四个限速字段捆成一个参数，免得 set 变成一串裸数字
-// ——那种签名下多加一个字段就很容易在某个调用点漏掉，而漏掉是静默的。
-type limits struct {
-	bandwidthBps        uint64
-	connLimit           uint32
-	committedBps        uint64
-	committedBurstBytes uint64
-	class               string
-}
-
-func (s *UserStore) set(username, password string, l limits) {
-	if username == "" {
-		return
-	}
-	s.users[username] = &protocol.MemoryUser{
-		Email:               username,
-		Level:               s.level,
-		BandwidthBps:        l.bandwidthBps,
-		ConnLimit:           l.connLimit,
-		CommittedBps:        l.committedBps,
-		CommittedBurstBytes: l.committedBurstBytes,
-		Class:               l.class,
-	}
-	s.password[username] = password
-	s.emailKey[username] = username
 }
 
 // setRuntime installs a boot user whose email may differ from its username, so
@@ -141,9 +92,7 @@ func (s *UserStore) Empty() bool {
 	return len(s.users) == 0
 }
 
-// Authenticate verifies username/password and returns the shared *MemoryUser for
-// that username. The same pointer is returned for every connection of a user, so
-// fair-share bandwidth and connection counting stay per-user, not per-connection.
+// 认证只在读锁内读取，凭据热改不产生空表窗口。
 func (s *UserStore) Authenticate(username, password string) (*protocol.MemoryUser, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -154,8 +103,6 @@ func (s *UserStore) Authenticate(username, password string) (*protocol.MemoryUse
 	return s.users[username], true
 }
 
-// Add registers/replaces a user (runtime AddUser). The MemoryUser already
-// carries top-level limits via ToMemoryUser.
 func (s *UserStore) Add(u *protocol.MemoryUser) error {
 	if u == nil || u.Email == "" {
 		return errUserMissingEmail
@@ -179,16 +126,7 @@ func (s *UserStore) Add(u *protocol.MemoryUser) error {
 	return nil
 }
 
-// Update replaces an existing user (keyed by email) in place, applying new
-// credentials and per-user limits. It is the UpdateUser path: a single atomic
-// swap that avoids the remove+add round trip and the transient window in which
-// the email has no user. The old *MemoryUser's runtime limiter and connection
-// counter are reset because both maps are keyed by the user pointer and Update
-// installs a fresh pointer; without the reset the old map entries would leak.
-// The new MemoryUser carries the new bandwidth_bps / conn_limit, so the
-// dispatcher's per-user enforcement picks up the new caps for subsequent
-// connections. Returns an error if the email is not already present so callers
-// do not silently turn an update into a create.
+// 凭据替换保留同一身份的会话生命周期，不中断已建立连接。
 func (s *UserStore) Update(u *protocol.MemoryUser) error {
 	if u == nil || u.Email == "" {
 		return errUserMissingEmail
@@ -207,8 +145,7 @@ func (s *UserStore) Update(u *protocol.MemoryUser) error {
 		return errors.New("user to update does not exist: ", u.Email)
 	}
 	if old := s.users[oldUsername]; old != nil {
-		old.ResetRuntimeLimiter()
-		old.ResetRuntimeConnections()
+		u.ShareRuntimeSessions(old)
 	}
 	if oldUsername != username {
 		delete(s.users, oldUsername)
@@ -220,8 +157,7 @@ func (s *UserStore) Update(u *protocol.MemoryUser) error {
 	return nil
 }
 
-// Remove drops a user and releases its runtime limiter + connection counter so a
-// re-added user with the same name does not inherit stale state.
+// 撤销身份同时断开现有会话。
 func (s *UserStore) Remove(email string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -230,8 +166,7 @@ func (s *UserStore) Remove(email string) {
 		username = email
 	}
 	if u := s.users[username]; u != nil {
-		u.ResetRuntimeLimiter()
-		u.ResetRuntimeConnections()
+		u.RevokeRuntimeSessions()
 	}
 	delete(s.users, username)
 	delete(s.password, username)

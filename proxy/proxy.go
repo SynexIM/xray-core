@@ -774,7 +774,7 @@ func CopyRawConnIfExist(ctx context.Context, readerConn net.Conn, writerConn net
 	if inbound == nil || inbound.CanSpliceCopy == 3 {
 		return readV(ctx, reader, writer, timer, readCounter)
 	}
-	if requiresBufferedCopy(inbound.User) {
+	if inbound.DisableSplice {
 		return readV(ctx, reader, writer, timer, readCounter)
 	}
 	outbounds := session.OutboundsFromContext(ctx)
@@ -843,23 +843,6 @@ func outboundRequiresBufferedCopy(outbounds []*session.Outbound) bool {
 		}
 	}
 	return false
-}
-
-// requiresBufferedCopy keeps governed users on the transport.Link path. Linux
-// splice copies directly between sockets and would bypass the per-user wrappers
-// installed by the dispatcher on that link.
-//
-// 节点级公平限速开启时对【所有】用户强制 buffered copy：splice 零拷贝直通会绕过
-// dispatcher 挂的 FairLimit 包装器——无 per-user 限速的用户既逃公平整形，也不进
-// 活跃字节统计（不占公平份额分母），拥挤时挤压守规矩用户。代价：公平开启 = 全节点
-// 放弃 splice 的零拷贝极限吞吐（产品决策：公平 > 极限吞吐）；公平未启用时保留 splice。
-func requiresBufferedCopy(user *protocol.MemoryUser) bool {
-	if protocol.FairScheduler().Enabled() {
-		return true
-	}
-	// 必须问「有没有任何限制」，不能只问 bandwidth_bps：只配了承诺速率（CIR）的
-	// 用户 bandwidth_bps 是 0，漏判就会走 splice，限速配了却一个字节都限不住。
-	return user.HasRuntimeLimits()
 }
 
 func readV(ctx context.Context, reader buf.Reader, writer buf.Writer, timer signal.ActivityUpdater, readCounter stats.Counter) error {

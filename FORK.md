@@ -325,3 +325,6 @@ go build ./... && go test ./app/... ./common/... ./proxy/... ./infra/conf/...
 ## Public release boundary
 
 This fork is published separately from the upstream XTLS release channel. The upstream MPL-2.0 license and copyright notices remain in force. See [RELEASE.md](RELEASE.md) for the tag, artifact, container, compatibility, and rollback requirements.
+# 2026-10-10 限速接口重塑（当前状态）
+
+User 已回到 `{level,email,account}`；历史限速字段号和名字保留为 reserved。删除旧整形器、节点公平服务、出口共享上限操作及协议账户上的限速字段；固定出口改由路由负责。保留凭据更新、批量装卸、入站 drain/resume、运行时 HTTP/SOCKS 账户、访问日志和 reverse 管理。下面涉及旧限速字段的描述仅为迁移历史，不再代表当前接口；新执行器在后续组引入 app/limit。

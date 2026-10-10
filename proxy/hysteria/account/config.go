@@ -83,7 +83,7 @@ func (v *Validator) Get(auth string) (user *protocol.MemoryUser) {
 			if user.Account.(*MemoryAccount).VR != VR {
 				alias := protocol.ToProtoUser(user).RuntimeMemoryUser()
 				alias.Account = &MemoryAccount{Auth: auth, VR: VR}
-				alias.InheritRuntimeConfig(user)
+				alias.ShareRuntimeSessions(user)
 				user = alias
 			}
 		}

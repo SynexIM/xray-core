@@ -246,8 +246,7 @@ func (h *Handler) RemoveUser(ctx context.Context, e string) error {
 	u := h.validator.GetByEmail(e)
 	h.RemoveReverse(u)
 	if u != nil {
-		u.ResetRuntimeLimiter()
-		u.ResetRuntimeConnections()
+		u.RevokeRuntimeSessions()
 	}
 	if err := h.validator.Del(e); err != nil {
 		return err

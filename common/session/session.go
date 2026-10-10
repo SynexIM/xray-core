@@ -56,6 +56,8 @@ type Inbound struct {
 	// CanSpliceCopy is a property for this connection
 	// 1 = can, 2 = after processing protocol info should be able to, 3 = cannot
 	CanSpliceCopy int
+	// 限速连接必须经过 link，不能让内核直通绕过桶。
+	DisableSplice bool
 }
 
 // Outbound is the metadata of an outbound connection.

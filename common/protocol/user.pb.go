@@ -29,73 +29,7 @@ type User struct {
 	Email string                 `protobuf:"bytes,2,opt,name=email,proto3" json:"email,omitempty"`
 	// Protocol specific account information. Must be the account proto in one of
 	// the proxies.
-	Account *serial.TypedMessage `protobuf:"bytes,3,opt,name=account,proto3" json:"account,omitempty"`
-	// Top-level, protocol-agnostic per-user runtime limits. Carried on User (not
-	// inside the protocol account) so EVERY inbound — mixed/socks/http, vless,
-	// shadowsocks, trojan — gets the same limits uniformly through ToMemoryUser,
-	// instead of each protocol re-implementing a RuntimeLimits() account method.
-	// 0 means unlimited. Bandwidth + connection cap + fair-share all key off the
-	// resulting *MemoryUser, so the dispatcher enforces them with no protocol code.
-	// Rate fields in this message, including the adopted directional `_bps`
-	// fields below, are business units in bit/s. Conversion to runtime byte/s is
-	// centralized in user_limits.go; fairshare command rates remain byte/s.
-	BandwidthBps uint64 `protobuf:"varint,4,opt,name=bandwidth_bps,json=bandwidthBps,proto3" json:"bandwidth_bps,omitempty"`
-	ConnLimit    uint32 `protobuf:"varint,5,opt,name=conn_limit,json=connLimit,proto3" json:"conn_limit,omitempty"`
-	// Dual-rate shaping (PIR / CIR / CBS). Optional on top of bandwidth_bps.
-	//
-	//	bandwidth_bps          PIR — peak rate, what a burst is allowed to reach
-	//	committed_bps          CIR — committed rate, what is sustained forever
-	//	committed_burst_bytes  CBS — how much may be spent at PIR before falling
-	//	                             back to CIR
-	//
-	// Leaving committed_bps at 0 keeps the plain single-rate behaviour: one
-	// bucket at bandwidth_bps. Setting it stacks a second, much deeper bucket
-	// behind the peak one — traffic has to clear both, so a fresh line runs at
-	// PIR until its burst allowance drains and then settles at CIR.
-	//
-	// committed_burst_bytes = 0 means no burst allowance: the committed bucket
-	// keeps its small default window, i.e. plain single-rate CIR.
-	// committed_bps above bandwidth_bps is meaningless and is ignored.
-	CommittedBps        uint64 `protobuf:"varint,6,opt,name=committed_bps,json=committedBps,proto3" json:"committed_bps,omitempty"`
-	CommittedBurstBytes uint64 `protobuf:"varint,7,opt,name=committed_burst_bytes,json=committedBurstBytes,proto3" json:"committed_burst_bytes,omitempty"`
-	// class 是争抢参数组的名字（权重、地板、保底、重度识别），参数本身走
-	// app.fairshare.command 的 SetClassPolicy 整份下发。表里没有这个名字 = 不加权、无地板。
-	Class string `protobuf:"bytes,8,opt,name=class,proto3" json:"class,omitempty"`
-	// Directional limits use the legacy committed/peak/burst contract in bit/s,
-	// bit/s, and bytes respectively. If any directional field is set, upload and
-	// download use separate buckets; otherwise fields 4, 6, and 7 retain the
-	// canonical symmetric PIR/CIR/CBS policy unchanged.
-	UploadBandwidthBps   uint64 `protobuf:"varint,9,opt,name=upload_bandwidth_bps,json=uploadBandwidthBps,proto3" json:"upload_bandwidth_bps,omitempty"`
-	UploadPeakBps        uint64 `protobuf:"varint,10,opt,name=upload_peak_bps,json=uploadPeakBps,proto3" json:"upload_peak_bps,omitempty"`
-	UploadBurstBytes     uint64 `protobuf:"varint,11,opt,name=upload_burst_bytes,json=uploadBurstBytes,proto3" json:"upload_burst_bytes,omitempty"`
-	DownloadBandwidthBps uint64 `protobuf:"varint,12,opt,name=download_bandwidth_bps,json=downloadBandwidthBps,proto3" json:"download_bandwidth_bps,omitempty"`
-	DownloadPeakBps      uint64 `protobuf:"varint,13,opt,name=download_peak_bps,json=downloadPeakBps,proto3" json:"download_peak_bps,omitempty"`
-	DownloadBurstBytes   uint64 `protobuf:"varint,14,opt,name=download_burst_bytes,json=downloadBurstBytes,proto3" json:"download_burst_bytes,omitempty"`
-	// EgressTag pins this authenticated user to an outbound tag. Empty preserves
-	// normal routing.
-	EgressTag string `protobuf:"bytes,15,opt,name=egress_tag,json=egressTag,proto3" json:"egress_tag,omitempty"`
-	// Pool shaping (tier_shaper.go). Standard is upload/download_bandwidth_bps
-	// (or bandwidth_bps when no direction is set); both directions use these.
-	//
-	//	burst_bit_per_sec + burst_credit_bytes  peak above standard paid from a
-	//	                                        credit that refills at standard
-	//	sustained_bit_per_sec                   the guaranteed rate of a heavy pool
-	//	                                        while the node is congested, and the
-	//	                                        cap once endurance runs out
-	//	endurance_bytes                         stamina above sustained: refills at
-	//	                                        sustained, drained by every granted
-	//	                                        byte; empty = capped at sustained
-	//	                                        (congested or not) until 20% back
-	//
-	// 0 disables that item.
-	BurstBitPerSec     uint64 `protobuf:"varint,16,opt,name=burst_bit_per_sec,json=burstBitPerSec,proto3" json:"burst_bit_per_sec,omitempty"`
-	BurstCreditBytes   uint64 `protobuf:"varint,17,opt,name=burst_credit_bytes,json=burstCreditBytes,proto3" json:"burst_credit_bytes,omitempty"`
-	SustainedBitPerSec uint64 `protobuf:"varint,18,opt,name=sustained_bit_per_sec,json=sustainedBitPerSec,proto3" json:"sustained_bit_per_sec,omitempty"`
-	EnduranceBytes     uint64 `protobuf:"varint,21,opt,name=endurance_bytes,json=enduranceBytes,proto3" json:"endurance_bytes,omitempty"`
-	// pool names the shaping pool. Every user object with the same pool shares
-	// one set of rates and burst credit regardless of inbound or protocol.
-	// Empty = the user's email is its pool.
-	Pool          string `protobuf:"bytes,20,opt,name=pool,proto3" json:"pool,omitempty"`
+	Account       *serial.TypedMessage `protobuf:"bytes,3,opt,name=account,proto3" json:"account,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -151,154 +85,17 @@ func (x *User) GetAccount() *serial.TypedMessage {
 	return nil
 }
 
-func (x *User) GetBandwidthBps() uint64 {
-	if x != nil {
-		return x.BandwidthBps
-	}
-	return 0
-}
-
-func (x *User) GetConnLimit() uint32 {
-	if x != nil {
-		return x.ConnLimit
-	}
-	return 0
-}
-
-func (x *User) GetCommittedBps() uint64 {
-	if x != nil {
-		return x.CommittedBps
-	}
-	return 0
-}
-
-func (x *User) GetCommittedBurstBytes() uint64 {
-	if x != nil {
-		return x.CommittedBurstBytes
-	}
-	return 0
-}
-
-func (x *User) GetClass() string {
-	if x != nil {
-		return x.Class
-	}
-	return ""
-}
-
-func (x *User) GetUploadBandwidthBps() uint64 {
-	if x != nil {
-		return x.UploadBandwidthBps
-	}
-	return 0
-}
-
-func (x *User) GetUploadPeakBps() uint64 {
-	if x != nil {
-		return x.UploadPeakBps
-	}
-	return 0
-}
-
-func (x *User) GetUploadBurstBytes() uint64 {
-	if x != nil {
-		return x.UploadBurstBytes
-	}
-	return 0
-}
-
-func (x *User) GetDownloadBandwidthBps() uint64 {
-	if x != nil {
-		return x.DownloadBandwidthBps
-	}
-	return 0
-}
-
-func (x *User) GetDownloadPeakBps() uint64 {
-	if x != nil {
-		return x.DownloadPeakBps
-	}
-	return 0
-}
-
-func (x *User) GetDownloadBurstBytes() uint64 {
-	if x != nil {
-		return x.DownloadBurstBytes
-	}
-	return 0
-}
-
-func (x *User) GetEgressTag() string {
-	if x != nil {
-		return x.EgressTag
-	}
-	return ""
-}
-
-func (x *User) GetBurstBitPerSec() uint64 {
-	if x != nil {
-		return x.BurstBitPerSec
-	}
-	return 0
-}
-
-func (x *User) GetBurstCreditBytes() uint64 {
-	if x != nil {
-		return x.BurstCreditBytes
-	}
-	return 0
-}
-
-func (x *User) GetSustainedBitPerSec() uint64 {
-	if x != nil {
-		return x.SustainedBitPerSec
-	}
-	return 0
-}
-
-func (x *User) GetEnduranceBytes() uint64 {
-	if x != nil {
-		return x.EnduranceBytes
-	}
-	return 0
-}
-
-func (x *User) GetPool() string {
-	if x != nil {
-		return x.Pool
-	}
-	return ""
-}
-
 var File_common_protocol_user_proto protoreflect.FileDescriptor
 
 const file_common_protocol_user_proto_rawDesc = "" +
 	"\n" +
-	"\x1acommon/protocol/user.proto\x12\x14xray.common.protocol\x1a!common/serial/typed_message.proto\"\xab\x06\n" +
+	"\x1acommon/protocol/user.proto\x12\x14xray.common.protocol\x1a!common/serial/typed_message.proto\"\x99\x03\n" +
 	"\x04User\x12\x14\n" +
 	"\x05level\x18\x01 \x01(\rR\x05level\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12:\n" +
-	"\aaccount\x18\x03 \x01(\v2 .xray.common.serial.TypedMessageR\aaccount\x12#\n" +
-	"\rbandwidth_bps\x18\x04 \x01(\x04R\fbandwidthBps\x12\x1d\n" +
-	"\n" +
-	"conn_limit\x18\x05 \x01(\rR\tconnLimit\x12#\n" +
-	"\rcommitted_bps\x18\x06 \x01(\x04R\fcommittedBps\x122\n" +
-	"\x15committed_burst_bytes\x18\a \x01(\x04R\x13committedBurstBytes\x12\x14\n" +
-	"\x05class\x18\b \x01(\tR\x05class\x120\n" +
-	"\x14upload_bandwidth_bps\x18\t \x01(\x04R\x12uploadBandwidthBps\x12&\n" +
-	"\x0fupload_peak_bps\x18\n" +
-	" \x01(\x04R\ruploadPeakBps\x12,\n" +
-	"\x12upload_burst_bytes\x18\v \x01(\x04R\x10uploadBurstBytes\x124\n" +
-	"\x16download_bandwidth_bps\x18\f \x01(\x04R\x14downloadBandwidthBps\x12*\n" +
-	"\x11download_peak_bps\x18\r \x01(\x04R\x0fdownloadPeakBps\x120\n" +
-	"\x14download_burst_bytes\x18\x0e \x01(\x04R\x12downloadBurstBytes\x12\x1d\n" +
-	"\n" +
-	"egress_tag\x18\x0f \x01(\tR\tegressTag\x12)\n" +
-	"\x11burst_bit_per_sec\x18\x10 \x01(\x04R\x0eburstBitPerSec\x12,\n" +
-	"\x12burst_credit_bytes\x18\x11 \x01(\x04R\x10burstCreditBytes\x121\n" +
-	"\x15sustained_bit_per_sec\x18\x12 \x01(\x04R\x12sustainedBitPerSec\x12'\n" +
-	"\x0fendurance_bytes\x18\x15 \x01(\x04R\x0eenduranceBytes\x12\x12\n" +
-	"\x04pool\x18\x14 \x01(\tR\x04poolJ\x04\b\x13\x10\x14B^\n" +
+	"\aaccount\x18\x03 \x01(\v2 .xray.common.serial.TypedMessageR\aaccountJ\x04\b\x04\x10\x16R\rbandwidth_bpsR\n" +
+	"conn_limitR\rcommitted_bpsR\x15committed_burst_bytesR\x05classR\x14upload_bandwidth_bpsR\x0fupload_peak_bpsR\x12upload_burst_bytesR\x16download_bandwidth_bpsR\x11download_peak_bpsR\x14download_burst_bytesR\n" +
+	"egress_tagR\x11burst_bit_per_secR\x12burst_credit_bytesR\x15sustained_bit_per_secR\x04poolR\x0fendurance_bytesB^\n" +
 	"\x18com.xray.common.protocolP\x01Z)github.com/xtls/xray-core/common/protocol\xaa\x02\x14Xray.Common.Protocolb\x06proto3"
 
 var (

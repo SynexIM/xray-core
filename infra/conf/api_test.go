@@ -18,7 +18,6 @@ func TestAPIServiceNames(t *testing.T) {
 		"observatoryservice",
 		"routingservice",
 		"accesslogservice",
-		"fairshareservice",
 		"reverseservice",
 	}
 

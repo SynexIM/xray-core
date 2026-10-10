@@ -218,15 +218,14 @@ func (c *InboundDetourConfig) Build() (*core.InboundHandlerConfig, error) {
 }
 
 type OutboundDetourConfig struct {
-	Protocol           string           `json:"protocol"`
-	SendThrough        *string          `json:"sendThrough"`
-	Tag                string           `json:"tag"`
-	Settings           *json.RawMessage `json:"settings"`
-	StreamSetting      *StreamConfig    `json:"streamSettings"`
-	ProxySettings      *json.RawMessage `json:"proxySettings"`
-	MuxSettings        *MuxConfig       `json:"mux"`
-	TargetStrategy     string           `json:"targetStrategy"`
-	RateLimitBitPerSec *uint64          `json:"rateLimitBitPerSec"`
+	Protocol       string           `json:"protocol"`
+	SendThrough    *string          `json:"sendThrough"`
+	Tag            string           `json:"tag"`
+	Settings       *json.RawMessage `json:"settings"`
+	StreamSetting  *StreamConfig    `json:"streamSettings"`
+	ProxySettings  *json.RawMessage `json:"proxySettings"`
+	MuxSettings    *MuxConfig       `json:"mux"`
+	TargetStrategy string           `json:"targetStrategy"`
 }
 
 func requiresTransportSecurity(address *Address) bool {
@@ -269,7 +268,7 @@ func (c *OutboundDetourConfig) Build() (*core.OutboundHandlerConfig, error) {
 		return nil, errors.PrintRemovedFeatureError(`outbound "proxySettings"`, `"streamSettings.sockopt.dialerProxy"`)
 	}
 
-	senderSettings := &proxyman.SenderConfig{RateLimitBitPerSec: c.RateLimitBitPerSec}
+	senderSettings := &proxyman.SenderConfig{}
 	switch strings.ToLower(c.TargetStrategy) {
 	case "asis", "":
 		senderSettings.TargetStrategy = internet.DomainStrategy_AS_IS

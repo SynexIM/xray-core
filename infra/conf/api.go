@@ -5,7 +5,6 @@ import (
 
 	accesslogservice "github.com/xtls/xray-core/app/accesslog/command"
 	"github.com/xtls/xray-core/app/commander"
-	fairshareservice "github.com/xtls/xray-core/app/fairshare/command"
 	loggerservice "github.com/xtls/xray-core/app/log/command"
 	observatoryservice "github.com/xtls/xray-core/app/observatory/command"
 	handlerservice "github.com/xtls/xray-core/app/proxyman/command"
@@ -44,8 +43,6 @@ func (c *APIConfig) Build() (*commander.Config, error) {
 			services = append(services, serial.ToTypedMessage(&routerservice.Config{}))
 		case "accesslogservice":
 			services = append(services, serial.ToTypedMessage(&accesslogservice.Config{}))
-		case "fairshareservice":
-			services = append(services, serial.ToTypedMessage(&fairshareservice.Config{}))
 		case "reverseservice":
 			services = append(services, serial.ToTypedMessage(&reverseservice.Config{}))
 		}

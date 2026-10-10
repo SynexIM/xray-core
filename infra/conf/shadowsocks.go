@@ -34,17 +34,6 @@ type ShadowsocksUserConfig struct {
 	Email    string   `json:"email"`
 	Address  *Address `json:"address"`
 	Port     uint16   `json:"port"`
-	// 每用户限速。留空 = 不限。单位 bit/s，与 protocol.User 的顶层字段同名，
-	// 所以所有协议的配置写法完全一致。
-	BandwidthBps uint64 `json:"bandwidth_bps"`
-	ConnLimit    uint32 `json:"conn_limit"`
-	// 双速率（可选）。committed_bps 是承诺速率 CIR，committed_burst_bytes 是
-	// 突发额度 CBS（字节，0 = 没有额度）。语义见 protocol.User。
-	CommittedBps        uint64 `json:"committed_bps"`
-	CommittedBurstBytes uint64 `json:"committed_burst_bytes"`
-	// class 标识共享同一争抢策略的客户组，策略表走 fairshare 的 SetClassPolicy 下发。
-	Class string `json:"class"`
-	UserRuntimeFields
 }
 
 type ShadowsocksServerConfig struct {
@@ -55,16 +44,6 @@ type ShadowsocksServerConfig struct {
 	Users       []*ShadowsocksUserConfig `json:"users"`
 	Clients     []*ShadowsocksUserConfig `json:"clients"`
 	NetworkList *NetworkList             `json:"network"`
-	// 每用户限速。留空 = 不限。单位 bit/s，与 protocol.User 的顶层字段同名，
-	// 所以所有协议的配置写法完全一致。
-	BandwidthBps uint64 `json:"bandwidth_bps"`
-	ConnLimit    uint32 `json:"conn_limit"`
-	// 双速率（可选）。committed_bps 是承诺速率 CIR，committed_burst_bytes 是
-	// 突发额度 CBS（字节，0 = 没有额度）。语义见 protocol.User。
-	CommittedBps        uint64 `json:"committed_bps"`
-	CommittedBurstBytes uint64 `json:"committed_burst_bytes"`
-	// class 标识共享同一争抢策略的客户组，策略表走 fairshare 的 SetClassPolicy 下发。
-	Class string `json:"class"`
 }
 
 func (v *ShadowsocksServerConfig) Build() (proto.Message, error) {
@@ -97,16 +76,11 @@ func (v *ShadowsocksServerConfig) Build() (proto.Message, error) {
 					account.CipherType > shadowsocks.CipherType_XCHACHA20_POLY1305 {
 					return errors.New("unsupported cipher method: ", user.Cipher)
 				}
-				config.Users[idx] = user.applyTo(&protocol.User{
-					Email:               user.Email,
-					Level:               uint32(user.Level),
-					Account:             serial.ToTypedMessage(account),
-					BandwidthBps:        user.BandwidthBps,
-					ConnLimit:           user.ConnLimit,
-					CommittedBps:        user.CommittedBps,
-					CommittedBurstBytes: user.CommittedBurstBytes,
-					Class:               user.Class,
-				})
+				config.Users[idx] = &protocol.User{
+					Email:   user.Email,
+					Level:   uint32(user.Level),
+					Account: serial.ToTypedMessage(account),
+				}
 				return nil
 			}
 			if err := task.ParallelForN(len(v.Users), processUser); err != nil {
@@ -125,14 +99,9 @@ func (v *ShadowsocksServerConfig) Build() (proto.Message, error) {
 			return nil, errors.New("unknown cipher method: ", v.Cipher)
 		}
 		config.Users = append(config.Users, &protocol.User{
-			Email:               v.Email,
-			Level:               uint32(v.Level),
-			Account:             serial.ToTypedMessage(account),
-			BandwidthBps:        v.BandwidthBps,
-			ConnLimit:           v.ConnLimit,
-			CommittedBps:        v.CommittedBps,
-			CommittedBurstBytes: v.CommittedBurstBytes,
-			Class:               v.Class,
+			Email:   v.Email,
+			Level:   uint32(v.Level),
+			Account: serial.ToTypedMessage(account),
 		})
 	}
 
@@ -177,16 +146,11 @@ func buildShadowsocks2022(v *ShadowsocksServerConfig) (proto.Message, error) {
 			account := &shadowsocks_2022.Account{
 				Key: user.Password,
 			}
-			config.Users[idx] = user.applyTo(&protocol.User{
-				Email:               user.Email,
-				Level:               uint32(user.Level),
-				Account:             serial.ToTypedMessage(account),
-				BandwidthBps:        user.BandwidthBps,
-				ConnLimit:           user.ConnLimit,
-				CommittedBps:        user.CommittedBps,
-				CommittedBurstBytes: user.CommittedBurstBytes,
-				Class:               user.Class,
-			})
+			config.Users[idx] = &protocol.User{
+				Email:   user.Email,
+				Level:   uint32(user.Level),
+				Account: serial.ToTypedMessage(account),
+			}
 			return nil
 		}
 		if err := task.ParallelForN(len(v.Users), processUser); err != nil {
@@ -211,12 +175,7 @@ func buildShadowsocks2022(v *ShadowsocksServerConfig) (proto.Message, error) {
 			Email:   user.Email,
 			Address: user.Address.Build(),
 			Port:    uint32(user.Port),
-			Level:               int32(user.Level),
-			BandwidthBps:        user.BandwidthBps,
-			ConnLimit:           user.ConnLimit,
-			CommittedBps:        user.CommittedBps,
-			CommittedBurstBytes: user.CommittedBurstBytes,
-			Class:               user.Class,
+			Level:   int32(user.Level),
 		})
 	}
 	return config, nil

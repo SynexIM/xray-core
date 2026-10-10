@@ -31,10 +31,6 @@ type OutboundOperation interface {
 	ApplyOutbound(context.Context, outbound.Handler) error
 }
 
-type outboundRateLimitSetter interface {
-	SetOutboundRateLimitBitPerSec(uint64) error
-}
-
 func getInbound(handler inbound.Handler) (proxy.Inbound, error) {
 	gi, ok := handler.(proxy.GetInbound)
 	if !ok {
@@ -60,7 +56,6 @@ func (op *AddUserOperation) ApplyInbound(ctx context.Context, handler inbound.Ha
 	if err := um.AddUser(ctx, mUser); err != nil {
 		return err
 	}
-	protocol.ApplyTierPolicy(mUser)
 	return nil
 }
 
@@ -98,9 +93,6 @@ func (op *AddUsersOperation) ApplyInbound(ctx context.Context, handler inbound.H
 	if err := applyAddUsers(ctx, um, users); err != nil {
 		return err
 	}
-	for _, u := range users {
-		protocol.ApplyTierPolicy(u)
-	}
 	return nil
 }
 
@@ -131,16 +123,7 @@ func (op *RemoveUsersOperation) ApplyInbound(ctx context.Context, handler inboun
 	return removeUsers(ctx, um, op.Emails)
 }
 
-// removeUsers 卸载用户，并把他们在进程里留下的运行态一并清掉。
-//
-// 为什么清理要放在这里：per-user 限速桶挂在全局 runtimeLimiters（sync.Map，键是
-// *MemoryUser 指针）上，连接计数同理。用户从 validator 里被删掉之后，那两张表
-// 仍然攥着他的指针——既回收不了内存，也让这个用户永远活在进程里。
-// 5 万实例的月度换手会稳定地攒出几万个这样的僵尸条目。
-//
-// 各协议的 RemoveUser 只收 email，拿不到 *MemoryUser，所以清理只能在**知道
-// 用户是谁**的这一层做：先查后删再清。放在这里还有一个好处——五个协议共用
-// 一份逻辑，不会有哪个协议漏掉。
+// 卸载成功后撤销身份，拦住认证与删除之间的竞态。
 func removeUsers(ctx context.Context, um proxy.UserManager, emails []string) error {
 	stale := make([]*protocol.MemoryUser, 0, len(emails))
 	for _, email := range emails {
@@ -163,16 +146,11 @@ func removeUsers(ctx context.Context, um proxy.UserManager, emails []string) err
 
 	for _, u := range stale {
 		u.RevokeRuntimeSessions()
-		u.ResetRuntimeLimiter()
-		u.ResetRuntimeConnections()
 	}
 	return nil
 }
 
-// ApplyInbound implements InboundOperation. It updates an existing user in place
-// (credentials + per-user limits) without dropping live connections. The inbound
-// proxy must implement proxy.UserUpdater; if it does not, the operation fails
-// explicitly rather than silently falling back to remove+add.
+// 凭据热改使用协议原有的原子更新能力，不做删除再添加。
 func (op *UpdateUserOperation) ApplyInbound(ctx context.Context, handler inbound.Handler) error {
 	p, err := getInbound(handler)
 	if err != nil {
@@ -188,11 +166,9 @@ func (op *UpdateUserOperation) ApplyInbound(ctx context.Context, handler inbound
 			return errors.New("user not found: ", mUser.Email)
 		}
 		if current.Account != nil && mUser.Account != nil && proto.Equal(current.Account.ToProto(), mUser.Account.ToProto()) {
-			if current.Level != mUser.Level || current.RuntimeConfig().Pool != mUser.Pool {
+			if current.Level != mUser.Level {
 				return errors.New("identity change requires remove and add")
 			}
-			current.AdoptLimits(mUser)
-			protocol.ApplyTierPolicy(current)
 			return nil
 		}
 	}
@@ -206,17 +182,7 @@ func (op *UpdateUserOperation) ApplyInbound(ctx context.Context, handler inbound
 	if err := uu.UpdateUser(ctx, mUser); err != nil {
 		return err
 	}
-	protocol.ApplyTierPolicy(mUser)
 	return nil
-}
-
-// ApplyOutbound changes one outbound's shared runtime limiter in place.
-func (op *SetOutboundRateLimitOperation) ApplyOutbound(_ context.Context, handler outbound.Handler) error {
-	setter, ok := handler.(outboundRateLimitSetter)
-	if !ok {
-		return errors.New("outbound does not support aggregate rate limiting")
-	}
-	return setter.SetOutboundRateLimitBitPerSec(op.RateLimitBitPerSec)
 }
 
 type handlerServer struct {
