@@ -411,6 +411,7 @@ type Config struct {
 	InboundConfigs   []InboundDetourConfig   `json:"inbounds"`
 	OutboundConfigs  []OutboundDetourConfig  `json:"outbounds"`
 	Policy           *PolicyConfig           `json:"policy"`
+	Limit            *LimitConfig            `json:"limit"`
 	API              *APIConfig              `json:"api"`
 	Metrics          *MetricsConfig          `json:"metrics"`
 	Stats            *StatsConfig            `json:"stats"`
@@ -468,6 +469,9 @@ func (c *Config) Override(o *Config, fn string) {
 	}
 	if o.Policy != nil {
 		c.Policy = o.Policy
+	}
+	if o.Limit != nil {
+		c.Limit = o.Limit
 	}
 	if o.API != nil {
 		c.API = o.API
@@ -613,6 +617,13 @@ func (c *Config) Build() (*core.Config, error) {
 			return nil, errors.New("failed to build policy configuration").Base(err)
 		}
 		config.App = append(config.App, serial.ToTypedMessage(pc))
+	}
+	if c.Limit != nil {
+		lc, err := c.Limit.Build()
+		if err != nil {
+			return nil, errors.New("failed to build limit configuration").Base(err)
+		}
+		config.App = append(config.App, serial.ToTypedMessage(lc))
 	}
 
 	if c.Reverse != nil {

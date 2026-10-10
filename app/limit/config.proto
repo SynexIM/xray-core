@@ -1,0 +1,39 @@
+syntax = "proto3";
+package xray.app.limit;
+option go_package = "github.com/xtls/xray-core/app/limit";
+
+// 接口统一使用 bit/s 与毫秒，整形器内部才换算为 byte/s。
+message Step { uint64 rate_bps = 1; uint64 for_ms = 2; }
+message Ladder { repeated Step steps = 1; }
+message Congested {
+  uint32 weight = 1;
+  uint64 floor_bps = 2;
+  uint32 heavy_window_seconds = 3;
+  uint32 heavy_percent = 4;
+}
+message Profile {
+  string name = 1;
+  Ladder up = 2;
+  Ladder down = 3;
+  Congested congested = 4;
+  uint32 max_connections = 5;
+  uint32 max_source_ips = 6;
+}
+message Rule {
+  string rule_tag = 1;
+  repeated string user = 2;
+  repeated string inbound_tag = 3;
+  repeated string outbound_tag = 4;
+  string profile = 5;
+}
+message NodeLimit {
+  uint64 capacity_bps = 1;
+  uint32 enter_percent = 2;
+  uint32 exit_percent = 3;
+  uint32 hold_seconds = 4;
+}
+message Config {
+  NodeLimit node = 1;
+  repeated Profile profiles = 2;
+  repeated Rule rules = 3;
+}

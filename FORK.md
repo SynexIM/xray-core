@@ -327,4 +327,6 @@ go build ./... && go test ./app/... ./common/... ./proxy/... ./infra/conf/...
 This fork is published separately from the upstream XTLS release channel. The upstream MPL-2.0 license and copyright notices remain in force. See [RELEASE.md](RELEASE.md) for the tag, artifact, container, compatibility, and rollback requirements.
 # 2026-10-10 限速接口重塑（当前状态）
 
+app/limit 的配置集中描述上下行速率阶梯、规则匹配、节点容量及拥挤参数。JSON 的 limit 段采用带单位速率和 Go 时长；阶梯、重复名称、规则条件和 profile 引用在 Build 时校验，protobuf 一律使用 bit/s 与毫秒。Hysteria 既有带宽解析采用二进制倍率（1mbps = 1048576 bit/s）；精确十进制速率可写 1000000bps。
+
 User 已回到 `{level,email,account}`；历史限速字段号和名字保留为 reserved。删除旧整形器、节点公平服务、出口共享上限操作及协议账户上的限速字段；固定出口改由路由负责。保留凭据更新、批量装卸、入站 drain/resume、运行时 HTTP/SOCKS 账户、访问日志和 reverse 管理。下面涉及旧限速字段的描述仅为迁移历史，不再代表当前接口；新执行器在后续组引入 app/limit。
