@@ -412,6 +412,7 @@ type Config struct {
 	OutboundConfigs  []OutboundDetourConfig  `json:"outbounds"`
 	Policy           *PolicyConfig           `json:"policy"`
 	Limit            *LimitConfig            `json:"limit"`
+	FlowLog          *FlowLogConfig          `json:"flowLog"`
 	API              *APIConfig              `json:"api"`
 	Metrics          *MetricsConfig          `json:"metrics"`
 	Stats            *StatsConfig            `json:"stats"`
@@ -472,6 +473,9 @@ func (c *Config) Override(o *Config, fn string) {
 	}
 	if o.Limit != nil {
 		c.Limit = o.Limit
+	}
+	if o.FlowLog != nil {
+		c.FlowLog = o.FlowLog
 	}
 	if o.API != nil {
 		c.API = o.API
@@ -624,6 +628,14 @@ func (c *Config) Build() (*core.Config, error) {
 			return nil, errors.New("failed to build limit configuration").Base(err)
 		}
 		config.App = append(config.App, serial.ToTypedMessage(lc))
+	}
+
+	if c.FlowLog != nil {
+		fc, err := c.FlowLog.Build()
+		if err != nil {
+			return nil, err
+		}
+		config.App = append(config.App, serial.ToTypedMessage(fc))
 	}
 
 	if c.Reverse != nil {

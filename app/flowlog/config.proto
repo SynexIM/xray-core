@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package xray.app.flowlog;
+option csharp_namespace = "Xray.App.Flowlog";
+option go_package = "github.com/xtls/xray-core/app/flowlog";
+option java_package = "com.xray.app.flowlog";
+option java_multiple_files = true;
+
+// Config 打开每连接一条的审计记录（JSON 行写本地文件，由 Vector 之类的采集器送走）。
+message Config {
+  // 当前文件路径；轮转出的旧文件为 path.1 … path.N。
+  string path = 1;
+  // 单个文件到多大就轮转；0 = 256MB。
+  uint32 max_size_mb = 2;
+  // 保留几个轮转出的旧文件；0 = 8。
+  uint32 max_files = 3;
+  // 长连接多久补一条中间记录；0 = 60 秒。
+  uint32 interim_seconds = 4;
+}

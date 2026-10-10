@@ -7,6 +7,7 @@ import (
 
 	// Mandatory features. Can't remove unless there are replacements.
 	_ "github.com/xtls/xray-core/app/dispatcher"
+	_ "github.com/xtls/xray-core/app/flowlog"
 	_ "github.com/xtls/xray-core/app/proxyman/inbound"
 	_ "github.com/xtls/xray-core/app/proxyman/outbound"
 
@@ -19,8 +20,6 @@ import (
 	_ "github.com/xtls/xray-core/app/stats/command"
 
 	// ipipx 魔改：访问聚合（#1）与节点级公平限速（#2）的 command 服务 + 聚合 app。
-	_ "github.com/xtls/xray-core/app/accesslog"
-	_ "github.com/xtls/xray-core/app/accesslog/command"
 	_ "github.com/xtls/xray-core/app/reverse/command"
 
 	// Developer preview services

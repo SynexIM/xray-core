@@ -15,6 +15,7 @@ import (
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/dns"
+	featureflowlog "github.com/xtls/xray-core/features/flowlog"
 	featurelimit "github.com/xtls/xray-core/features/limit"
 	"github.com/xtls/xray-core/features/outbound"
 	"github.com/xtls/xray-core/features/policy"
@@ -106,6 +107,7 @@ type DefaultDispatcher struct {
 	stats   stats.Manager
 	fdns    dns.FakeDNSEngine
 	limiter featurelimit.Limiter
+	flowlog featureflowlog.Recorder
 }
 
 func init() {
@@ -113,6 +115,9 @@ func init() {
 		d := new(DefaultDispatcher)
 		if err := core.RequireFeatures(ctx, func(om outbound.Manager, router routing.Router, pm policy.Manager, sm stats.Manager, dc dns.Client) error {
 			if err := core.OptionalFeatures(ctx, func(l featurelimit.Limiter) { d.limiter = l }); err != nil {
+				return err
+			}
+			if err := core.OptionalFeatures(ctx, func(r featureflowlog.Recorder) { d.flowlog = r }); err != nil {
 				return err
 			}
 			core.OptionalFeatures(ctx, func(fdns dns.FakeDNSEngine) {
@@ -633,6 +638,20 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 	}
 
 	ob.Tag = handler.Tag()
+	// 审计在限速之前挂上：被限速拒绝的连接也要留一条记录。
+	flowResult, finishFlow := "", func(string) {}
+	if d.flowlog != nil {
+		rec := featureflowlog.Session{Target: destination, Outbound: ob}
+		if inbound := session.InboundFromContext(ctx); inbound != nil {
+			rec.InboundTag, rec.Source = inbound.Tag, inbound.Source
+			if inbound.User != nil {
+				rec.Email = inbound.User.Email
+			}
+		}
+		up, down, finish := d.flowlog.Open(ctx, rec)
+		link.Reader, link.Writer, finishFlow = up(link.Reader), down(link.Writer), finish
+	}
+	defer func() { finishFlow(flowResult) }()
 	if d.limiter != nil {
 		info := featurelimit.SessionInfo{OutboundTag: ob.Tag, Datagram: destination.Network == net.Network_UDP}
 		if inbound := session.InboundFromContext(ctx); inbound != nil {
@@ -647,6 +666,7 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 		up, down, release, err := d.limiter.Attach(ctx, info)
 		if err != nil {
 			errors.LogWarningInner(ctx, err, "limit admission rejected")
+			flowResult = "rejected: " + err.Error()
 			session.SubmitOutboundErrorToOriginator(ctx, err)
 			common.Interrupt(link.Reader)
 			common.Interrupt(link.Writer)
@@ -677,8 +697,4 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 	}
 
 	handler.Dispatch(ctx, link)
-
-	// ipipx 旁路：连接生命周期结束后记一条访问（唯一 emit 点）。此刻 freedom 已回填 DialedRemoteAddr，
-	// destIP 可信；域名取自 ob.Target/OriginalTarget。覆盖 freedom 真出口 + blackhole 禁陆，每连接恰一条。
-	emitAccessForOutbound(ctx, ob, time.Now().Unix())
 }

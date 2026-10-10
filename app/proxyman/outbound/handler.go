@@ -273,6 +273,12 @@ func (h *Handler) Dial(ctx context.Context, dest net.Destination) (stat.Connecti
 	}
 
 	conn, err := internet.Dial(ctx, dest, h.streamSettings)
+	if err == nil && conn != nil {
+		// 所有出站拨号都经过这里：记下两端地址，审计据此回答"出站本机 IP:端口是谁"。
+		if outbounds := session.OutboundsFromContext(ctx); len(outbounds) > 0 {
+			outbounds[len(outbounds)-1].SetDialed(conn.LocalAddr(), conn.RemoteAddr())
+		}
+	}
 	conn = h.getStatCouterConnection(conn)
 	return conn, err
 }

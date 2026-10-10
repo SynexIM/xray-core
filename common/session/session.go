@@ -4,6 +4,7 @@ package session // import "github.com/xtls/xray-core/common/session"
 import (
 	"context"
 	"math/rand"
+	"sync/atomic"
 
 	c "github.com/xtls/xray-core/common/ctx"
 	"github.com/xtls/xray-core/common/errors"
@@ -73,11 +74,21 @@ type Outbound struct {
 	// CanSpliceCopy is a property for this connection
 	// 1 = can, 2 = after processing protocol info should be able to, 3 = cannot
 	CanSpliceCopy int
-	// DialedRemoteAddr 是 ipipx 旁路：出站真正拨通后的对端 IP（freedom 解析域名后实际连上的远端）。
-	// 客户端送域名时 OriginalTarget/Target 无 IP，唯一可信目标 IP 在此（由 freedom 拨通后回填）。
-	// 访问日志 hook 据此补齐 destIP。nil = 未拨通/未回填（如 blackhole 禁陆，无真连接）。
-	DialedRemoteAddr net.Address
+	// dialed 是出站真正拨通后的本机与对端地址（审计要"出站本机 IP:端口"）。
+	// 由出站 Handler.Dial 写、审计记录读，二者并发，故用原子指针。
+	dialed atomic.Pointer[Dialed]
 }
+
+// Dialed 是一次出站拨号的两端地址。
+type Dialed struct {
+	Local, Remote net.Addr
+}
+
+// SetDialed 记下出站拨通后的两端地址；同一出站多次拨号（如 UDP）保留最后一次。
+func (o *Outbound) SetDialed(local, remote net.Addr) { o.dialed.Store(&Dialed{Local: local, Remote: remote}) }
+
+// Dialed 返回出站拨通后的两端地址；还没拨通（或不拨号，如 blackhole）返回 nil。
+func (o *Outbound) Dialed() *Dialed { return o.dialed.Load() }
 
 // SniffingRequest controls the behavior of content sniffing. They are from inbound config. Read-only
 type SniffingRequest struct {

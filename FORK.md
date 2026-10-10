@@ -78,7 +78,8 @@ JSON 的速率用带单位字符串、时间用 Go 时长；protobuf 用 bit/s �
 | `app/proxyman/outbound/outbound.go` | 读锁内读取 tagsCache，避免增删出站竞争 |
 | `app/router/*`、`app/router/command/*` | BatchAddRule/BatchRemoveRule/ListRuleFull，保留原生规则快照，命名规则原子替换；规则列表保留 user/inboundTag |
 | `app/stats/command/*`、`features/stats/*` | 指定 email 查询在线状态与累计流量，不重置其他身份 |
-| `app/accesslog/*`、`app/dispatcher/accesshook.go` | 访问日志聚合与 PullAccess，访问日志补齐目标 IP |
+| `app/flowlog/*`、`features/flowlog/*`、`infra/conf/flowlog.go` | 每连接一条审计记录（JSON 行、按大小轮转、60 秒中间记录、有界不阻塞），取代已删除的 `app/accesslog` 聚合与访问钩子 |
+| `app/proxyman/outbound/handler.go`、`common/session/session.go` | 出站拨通后把本机 / 对端地址存进 `session.Outbound`（原子），供审计回答"出站本机 IP:端口" |
 | `app/policy/*`、`features/policy/*`、`app/dispatcher/stats.go` | user_site 按站点计流量开关；本任务保持不动 |
 | `app/reverse/*`、`app/reverse/command/*` | bridge/portal 增删查与并发保护；删 bridge 停 monitor，存量 worker 自然收敛 |
 | `infra/conf/api.go`、`main/distro/all/all.go` | 新 app 与 command service 的注册 |

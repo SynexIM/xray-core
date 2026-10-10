@@ -3,7 +3,6 @@ package conf
 import (
 	"strings"
 
-	accesslogservice "github.com/xtls/xray-core/app/accesslog/command"
 	capabilityservice "github.com/xtls/xray-core/app/capability/command"
 	"github.com/xtls/xray-core/app/commander"
 	limitservice "github.com/xtls/xray-core/app/limit/command"
@@ -46,8 +45,6 @@ func (c *APIConfig) Build() (*commander.Config, error) {
 			services = append(services, serial.ToTypedMessage(&observatoryservice.Config{}))
 		case "routingservice":
 			services = append(services, serial.ToTypedMessage(&routerservice.Config{}))
-		case "accesslogservice":
-			services = append(services, serial.ToTypedMessage(&accesslogservice.Config{}))
 		case "reverseservice":
 			services = append(services, serial.ToTypedMessage(&reverseservice.Config{}))
 		case "policyservice":
