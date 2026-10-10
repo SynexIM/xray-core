@@ -23,6 +23,8 @@ var CmdAPI = &base.Command{
 		cmdRemoveOutbounds,
 		cmdListInbounds,
 		cmdListOutbounds,
+		cmdLimit,
+		cmdKillConnections,
 		cmdAddInboundUsers,
 		cmdRemoveInboundUsers,
 		cmdInboundUser,

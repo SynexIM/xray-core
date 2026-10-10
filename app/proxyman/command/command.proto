@@ -50,6 +50,9 @@ message RemoveInboundRequest {
 
 message RemoveInboundResponse {}
 
+message KillUserConnectionsRequest { repeated string emails = 1; }
+message KillUserConnectionsResponse {}
+
 message DrainInboundRequest {
   string tag = 1;
 }
@@ -140,6 +143,7 @@ message ListOutboundsResponse {
 
 
 service HandlerService {
+  rpc KillUserConnections(KillUserConnectionsRequest) returns (KillUserConnectionsResponse) {}
   rpc AddInbound(AddInboundRequest) returns (AddInboundResponse) {}
 
   rpc RemoveInbound(RemoveInboundRequest) returns (RemoveInboundResponse) {}

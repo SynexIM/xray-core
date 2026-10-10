@@ -327,6 +327,8 @@ go build ./... && go test ./app/... ./common/... ./proxy/... ./infra/conf/...
 This fork is published separately from the upstream XTLS release channel. The upstream MPL-2.0 license and copyright notices remain in force. See [RELEASE.md](RELEASE.md) for the tag, artifact, container, compatibility, and rollback requirements.
 # 2026-10-10 限速接口重塑（当前状态）
 
+LimitService 提供 SetNode、PutProfiles、RemoveProfiles、AddRules、RemoveRules、ListRules 与 GetStatus；仍被规则引用的 profile 删除返回 FAILED_PRECONDITION，并列出引用者。HandlerService.KillUserConnections 按 email 断现有会话，保留用户与凭据。配置 api.services 中使用 LimitService，运行时管理通过本机 unix socket 验证。
+
 节点用量按每条 link 记一次，不把多规则命中重复计入利用率。启用 limit 模块的未命中连接也经过无桶的计量包装，保持不限速；为避免 splice 绕过节点计量（尤其 SetNode 热开时的旧连接），这些连接同样留在用户态。完全不加载 limit 时保持上游 splice 路径。
 
 运行时由 app/limit 持有每条规则的上下行阶梯桶、连接/IP 表和拥挤调度。dispatcher 路由后通过 features/limit.Limiter 挂载：该 link 的上行是 Reader、下行是 Writer，包装保留 UDP/XUDP 边界和关闭接口。命中规则的会话用原子标记禁用 Vision splice；User 的会话管理已移到按 email 的表，弱身份键保留删除竞态保护。规则替换只改变新连接；profile 参数原地更新，对存量连接下一片生效。

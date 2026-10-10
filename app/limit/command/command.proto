@@ -1,0 +1,51 @@
+syntax = "proto3";
+package xray.app.limit.command;
+option go_package = "github.com/xtls/xray-core/app/limit/command";
+import "app/limit/config.proto";
+
+message SetNodeRequest { xray.app.limit.NodeLimit node = 1; }
+message SetNodeResponse {}
+message PutProfilesRequest { repeated xray.app.limit.Profile profiles = 1; }
+message PutProfilesResponse {}
+message RemoveProfilesRequest { repeated string names = 1; }
+message RemoveProfilesResponse {}
+message AddRulesRequest { repeated xray.app.limit.Rule rules = 1; }
+message AddRulesResponse {}
+message RemoveRulesRequest { repeated string rule_tags = 1; }
+message RemoveRulesResponse {}
+message ListRulesRequest { uint32 offset = 1; uint32 limit = 2; }
+message RuleSummary { string rule_tag = 1; string profile = 2; }
+message ListRulesResponse { repeated RuleSummary rules = 1; uint32 total = 2; }
+message GetStatusRequest { string rule_tag = 1; }
+message NodeStatus {
+  bool congested = 1;
+  double utilization_percent = 2;
+  uint64 upload_bps = 3;
+  uint64 download_bps = 4;
+}
+message DirectionStatus {
+  uint64 current_rate_bps = 1;
+  // 档位从 1 起，0 表示该方向没有阶梯。
+  uint32 current_step = 2;
+  repeated uint64 remaining_bytes = 3;
+  repeated uint64 capacity_bytes = 4;
+}
+message RuleStatus {
+  string rule_tag = 1;
+  string profile = 2;
+  DirectionStatus up = 3;
+  DirectionStatus down = 4;
+  uint32 connections = 5;
+  uint32 source_ips = 6;
+}
+message GetStatusResponse { NodeStatus node = 1; RuleStatus rule = 2; }
+service LimitService {
+  rpc SetNode(SetNodeRequest) returns (SetNodeResponse);
+  rpc PutProfiles(PutProfilesRequest) returns (PutProfilesResponse);
+  rpc RemoveProfiles(RemoveProfilesRequest) returns (RemoveProfilesResponse);
+  rpc AddRules(AddRulesRequest) returns (AddRulesResponse);
+  rpc RemoveRules(RemoveRulesRequest) returns (RemoveRulesResponse);
+  rpc ListRules(ListRulesRequest) returns (ListRulesResponse);
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+}
+message Config {}

@@ -19,6 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	HandlerService_KillUserConnections_FullMethodName  = "/xray.app.proxyman.command.HandlerService/KillUserConnections"
 	HandlerService_AddInbound_FullMethodName           = "/xray.app.proxyman.command.HandlerService/AddInbound"
 	HandlerService_RemoveInbound_FullMethodName        = "/xray.app.proxyman.command.HandlerService/RemoveInbound"
 	HandlerService_DrainInbound_FullMethodName         = "/xray.app.proxyman.command.HandlerService/DrainInbound"
@@ -38,6 +39,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type HandlerServiceClient interface {
+	KillUserConnections(ctx context.Context, in *KillUserConnectionsRequest, opts ...grpc.CallOption) (*KillUserConnectionsResponse, error)
 	AddInbound(ctx context.Context, in *AddInboundRequest, opts ...grpc.CallOption) (*AddInboundResponse, error)
 	RemoveInbound(ctx context.Context, in *RemoveInboundRequest, opts ...grpc.CallOption) (*RemoveInboundResponse, error)
 	// DrainInbound closes only the listening socket. Established TCP sessions
@@ -61,6 +63,16 @@ type handlerServiceClient struct {
 
 func NewHandlerServiceClient(cc grpc.ClientConnInterface) HandlerServiceClient {
 	return &handlerServiceClient{cc}
+}
+
+func (c *handlerServiceClient) KillUserConnections(ctx context.Context, in *KillUserConnectionsRequest, opts ...grpc.CallOption) (*KillUserConnectionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KillUserConnectionsResponse)
+	err := c.cc.Invoke(ctx, HandlerService_KillUserConnections_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *handlerServiceClient) AddInbound(ctx context.Context, in *AddInboundRequest, opts ...grpc.CallOption) (*AddInboundResponse, error) {
@@ -197,6 +209,7 @@ func (c *handlerServiceClient) ListOutbounds(ctx context.Context, in *ListOutbou
 // All implementations must embed UnimplementedHandlerServiceServer
 // for forward compatibility.
 type HandlerServiceServer interface {
+	KillUserConnections(context.Context, *KillUserConnectionsRequest) (*KillUserConnectionsResponse, error)
 	AddInbound(context.Context, *AddInboundRequest) (*AddInboundResponse, error)
 	RemoveInbound(context.Context, *RemoveInboundRequest) (*RemoveInboundResponse, error)
 	// DrainInbound closes only the listening socket. Established TCP sessions
@@ -222,6 +235,9 @@ type HandlerServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedHandlerServiceServer struct{}
 
+func (UnimplementedHandlerServiceServer) KillUserConnections(context.Context, *KillUserConnectionsRequest) (*KillUserConnectionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method KillUserConnections not implemented")
+}
 func (UnimplementedHandlerServiceServer) AddInbound(context.Context, *AddInboundRequest) (*AddInboundResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AddInbound not implemented")
 }
@@ -280,6 +296,24 @@ func RegisterHandlerServiceServer(s grpc.ServiceRegistrar, srv HandlerServiceSer
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&HandlerService_ServiceDesc, srv)
+}
+
+func _HandlerService_KillUserConnections_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(KillUserConnectionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HandlerServiceServer).KillUserConnections(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HandlerService_KillUserConnections_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HandlerServiceServer).KillUserConnections(ctx, req.(*KillUserConnectionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _HandlerService_AddInbound_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -523,6 +557,10 @@ var HandlerService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "xray.app.proxyman.command.HandlerService",
 	HandlerType: (*HandlerServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "KillUserConnections",
+			Handler:    _HandlerService_KillUserConnections_Handler,
+		},
 		{
 			MethodName: "AddInbound",
 			Handler:    _HandlerService_AddInbound_Handler,

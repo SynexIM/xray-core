@@ -191,6 +191,12 @@ type handlerServer struct {
 	ohm outbound.Manager
 }
 
+// 断开旧连接后身份仍然有效，重连可以走新的路由出口。
+func (s *handlerServer) KillUserConnections(_ context.Context, request *KillUserConnectionsRequest) (*KillUserConnectionsResponse, error) {
+	protocol.KillUserConnections(request.Emails)
+	return &KillUserConnectionsResponse{}, nil
+}
+
 func (s *handlerServer) AddInbound(ctx context.Context, request *AddInboundRequest) (*AddInboundResponse, error) {
 	if err := core.AddInboundHandler(s.s, request.Inbound); err != nil {
 		return nil, err

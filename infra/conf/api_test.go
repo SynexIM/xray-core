@@ -13,6 +13,7 @@ func TestAPIServiceNames(t *testing.T) {
 	names := []string{
 		"reflectionservice",
 		"handlerservice",
+		"limitservice",
 		"loggerservice",
 		"statsservice",
 		"observatoryservice",
