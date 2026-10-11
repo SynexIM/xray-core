@@ -277,12 +277,16 @@ type ClientConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Sever is a list of Socks server addresses.
 	Server *protocol.ServerEndpoint `protobuf:"bytes,1,opt,name=server,proto3" json:"server,omitempty"`
-	// The handshake is pipelined by default with automatic fallback (fork; see
-	// pipeline.go). no_pipeline turns it off for this outbound.
+	// The handshake stages are sent staggered without waiting for replies once
+	// the upstream passes a background self-check (fork; see handshake.go,
+	// upstream.go). no_pipeline turns it off for this outbound.
 	NoPipeline bool `protobuf:"varint,2,opt,name=no_pipeline,json=noPipeline,proto3" json:"no_pipeline,omitempty"`
 	// Authenticated connections are kept warm by default (fork; see warm.go).
 	// no_prewarm turns it off for this outbound.
-	NoPrewarm     bool `protobuf:"varint,3,opt,name=no_prewarm,json=noPrewarm,proto3" json:"no_prewarm,omitempty"`
+	NoPrewarm bool `protobuf:"varint,3,opt,name=no_prewarm,json=noPrewarm,proto3" json:"no_prewarm,omitempty"`
+	// The first payload follows the request without waiting for its reply once
+	// the upstream passes the self-check. no_early_data turns it off.
+	NoEarlyData   bool `protobuf:"varint,4,opt,name=no_early_data,json=noEarlyData,proto3" json:"no_early_data,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -338,6 +342,13 @@ func (x *ClientConfig) GetNoPrewarm() bool {
 	return false
 }
 
+func (x *ClientConfig) GetNoEarlyData() bool {
+	if x != nil {
+		return x.NoEarlyData
+	}
+	return false
+}
+
 var File_proxy_socks_config_proto protoreflect.FileDescriptor
 
 const file_proxy_socks_config_proto_rawDesc = "" +
@@ -362,13 +373,14 @@ const file_proxy_socks_config_proto_rawDesc = "" +
 	"\ruser_accounts\x18\a \x03(\v2\x1d.xray.proxy.socks.UserAccountR\fuserAccounts\x1a;\n" +
 	"\rAccountsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8c\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb0\x01\n" +
 	"\fClientConfig\x12<\n" +
 	"\x06server\x18\x01 \x01(\v2$.xray.common.protocol.ServerEndpointR\x06server\x12\x1f\n" +
 	"\vno_pipeline\x18\x02 \x01(\bR\n" +
 	"noPipeline\x12\x1d\n" +
 	"\n" +
-	"no_prewarm\x18\x03 \x01(\bR\tnoPrewarm*%\n" +
+	"no_prewarm\x18\x03 \x01(\bR\tnoPrewarm\x12\"\n" +
+	"\rno_early_data\x18\x04 \x01(\bR\vnoEarlyData*%\n" +
 	"\bAuthType\x12\v\n" +
 	"\aNO_AUTH\x10\x00\x12\f\n" +
 	"\bPASSWORD\x10\x01BR\n" +

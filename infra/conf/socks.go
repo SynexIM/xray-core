@@ -90,16 +90,20 @@ type SocksClientConfig struct {
 	Username string               `json:"user"`
 	Password string               `json:"pass"`
 	Servers  []*SocksRemoteConfig `json:"servers"`
-	// Pipeline（fork）：握手三段一次发出，省两个来回；默认开、上游不支持自动退回，写 false 才关。
+	// 以下三项是 fork 的性能优化，默认开、上游不支持自动不用，写 false 才关（proxy/socks/upstream.go）。
+	// Pipeline：握手各段错开几毫秒发出、不等回复，后台自检通过才用。
 	Pipeline *bool `json:"pipeline"`
-	// Prewarm（fork）：按需求预先建好已认证的上游连接，省掉 TCP 握手；默认开、自动回退，写 false 才关。
+	// Prewarm：按需求预先建好已认证的上游连接，省掉 TCP 握手与认证。
 	Prewarm *bool `json:"prewarm"`
+	// EarlyData：首包紧跟请求发出、不等"连接成功"，后台自检通过才用。
+	EarlyData *bool `json:"earlyData"`
 }
 
 func (v *SocksClientConfig) Build() (proto.Message, error) {
 	config := &socks.ClientConfig{
-		NoPipeline: v.Pipeline != nil && !*v.Pipeline,
-		NoPrewarm:  v.Prewarm != nil && !*v.Prewarm,
+		NoPipeline:  v.Pipeline != nil && !*v.Pipeline,
+		NoPrewarm:   v.Prewarm != nil && !*v.Prewarm,
+		NoEarlyData: v.EarlyData != nil && !*v.EarlyData,
 	}
 	if v.Address != nil {
 		v.Servers = []*SocksRemoteConfig{

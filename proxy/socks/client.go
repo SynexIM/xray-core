@@ -22,7 +22,7 @@ import (
 type Client struct {
 	server        *protocol.ServerSpec
 	policyManager policy.Manager
-	pipeline      *pipelineState
+	caps          *upstreamCaps
 	warm          *warmPool
 }
 
@@ -40,7 +40,7 @@ func NewClient(ctx context.Context, config *ClientConfig) (*Client, error) {
 	c := &Client{
 		server:        server,
 		policyManager: v.GetFeature(policy.ManagerType()).(policy.Manager),
-		pipeline:      &pipelineState{disabled: config.NoPipeline},
+		caps:          &upstreamCaps{noStagger: config.NoPipeline, noEarly: config.NoEarlyData},
 		warm:          &warmPool{disabled: config.NoPrewarm},
 	}
 
@@ -82,8 +82,17 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 		p = c.policyManager.ForLevel(user.Level)
 	}
 
+	// First payload rides with the request when the upstream passed the self-check (fork: upstream.go).
+	var early []byte
+	if _, ok := c.caps.get(); ok && request.Command == protocol.RequestCommandTCP {
+		var err error
+		if early, err = takeFirstPayload(link.Reader); err != nil {
+			return errors.New("failed to read first payload").Base(err)
+		}
+	}
+
 	// Connection to the outbound server, with the request already answered (fork: warm.go).
-	conn, udpRequest, err := c.connect(ctx, dialer, request, p)
+	conn, udpRequest, err := c.connect(ctx, dialer, request, early, p)
 	if err != nil {
 		return errors.New("failed to establish connection to server").Base(err)
 	}

@@ -48,10 +48,14 @@ message ServerConfig {
 message ClientConfig {
   // Sever is a list of Socks server addresses.
   xray.common.protocol.ServerEndpoint server = 1;
-  // The handshake is pipelined by default with automatic fallback (fork; see
-  // pipeline.go). no_pipeline turns it off for this outbound.
+  // The handshake stages are sent staggered without waiting for replies once
+  // the upstream passes a background self-check (fork; see handshake.go,
+  // upstream.go). no_pipeline turns it off for this outbound.
   bool no_pipeline = 2;
   // Authenticated connections are kept warm by default (fork; see warm.go).
   // no_prewarm turns it off for this outbound.
   bool no_prewarm = 3;
+  // The first payload follows the request without waiting for its reply once
+  // the upstream passes the self-check. no_early_data turns it off.
+  bool no_early_data = 4;
 }

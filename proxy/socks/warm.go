@@ -20,12 +20,12 @@ import (
 //
 // 默认开启、自动回退：
 //   - 只在近 warmWindow 内有过连接时补，数量跟着需求走，最多 warmMax 条；没人用就不补。
-//   - 预热连接空闲 warmMaxIdle 就关（实测上游会掐掉认证后 60 秒不发请求的连接）。
+//   - 预热连接空闲 warmMaxIdle 就关（实测：一个上游掐掉认证后 60 秒不发请求的连接，另 6 个 45 秒仍可用）。
 //   - 拿到的预热连接失效就当场换新连接重来，客户端无感；连续失效 warmMaxMisses 次，
 //     说明这个上游不适合预热，停用 warmBackoff。
 //   - 补连接失败按指数退避（200ms 起翻倍，封顶 10 秒），成功即复位：上游断了也不会被反复狂拨
 //     （Xray VLESS testpre 吃过这个亏，见 XTLS/Xray-core#7113）。补连接只由真实请求触发，不自转。
-//   - 用户名口令认证的上游，预热时问候与认证一次写完，需要流水线可用；被判不支持流水线，预热随之停。
+//   - 预热在后台按 RFC 1928 逐段认证，不依赖上游接受错开发送，任何上游都能用。
 const (
 	warmMax       = 4
 	warmWindow    = 10 * time.Second
@@ -149,8 +149,9 @@ func (w *warmPool) refill(open func() (stat.Connection, error)) {
 	}
 }
 
-// connect 拿到一条已经对上游发完请求、读完回复的连接：预热连接 → 流水线握手 → 逐段握手。
-func (c *Client) connect(ctx context.Context, dialer internet.Dialer, request *protocol.RequestHeader, p policy.Session) (stat.Connection, *protocol.RequestHeader, error) {
+// connect 拿到一条已经对上游发完请求（以及 early 首包）、读完回复的连接：
+// 预热连接 → 错开发送（自检通过才用）→ 逐段握手。early 在每次重试里都会重新带上，不丢数据。
+func (c *Client) connect(ctx context.Context, dialer internet.Dialer, request *protocol.RequestHeader, early []byte, p policy.Session) (stat.Connection, *protocol.RequestHeader, error) {
 	dest := c.server.Destination
 	dial := func(ctx context.Context) (stat.Connection, error) {
 		var conn stat.Connection
@@ -164,18 +165,18 @@ func (c *Client) connect(ctx context.Context, dialer internet.Dialer, request *p
 		}
 		return conn, nil
 	}
-	pipelined := request.User != nil && c.pipeline.usable(time.Now())
 	detached := context.WithoutCancel(ctx)
+	openDetached := func() (stat.Connection, error) { return dial(detached) }
+	c.caps.maybeCheck(func() (capState, capState) {
+		return selfCheck(openDetached, request.User, c.caps.noStagger, c.caps.noEarly)
+	})
 	defer c.warm.refill(func() (stat.Connection, error) {
-		if request.User != nil && !c.pipeline.usable(time.Now()) {
-			return nil, errors.New("pipelining unavailable")
-		}
 		conn, err := dial(detached)
 		if err != nil {
 			return nil, err
 		}
 		_ = conn.SetDeadline(time.Now().Add(p.Timeouts.Handshake))
-		if err := pipelinedAuth(request.User, nil, conn, conn, time.Now().Add(p.Timeouts.Handshake)); err != nil {
+		if err := authenticate(request.User, conn); err != nil {
 			conn.Close()
 			return nil, err
 		}
@@ -185,7 +186,7 @@ func (c *Client) connect(ctx context.Context, dialer internet.Dialer, request *p
 
 	if conn := c.warm.take(time.Now()); conn != nil {
 		_ = conn.SetDeadline(time.Now().Add(p.Timeouts.Handshake))
-		udp, err := requestOnWarm(request, conn)
+		udp, err := sendRequest(request, early, conn)
 		var refused *handshakeRefused
 		switch {
 		case err == nil:
@@ -207,28 +208,24 @@ func (c *Client) connect(ctx context.Context, dialer internet.Dialer, request *p
 	}
 	deadline := time.Now().Add(p.Timeouts.Handshake)
 	_ = conn.SetDeadline(deadline)
-	if !pipelined {
-		udp, err := ClientHandshake(request, conn, conn)
-		return finish(conn, udp, err)
+	if staggered, _ := c.caps.get(); staggered {
+		udp, err := staggeredHandshake(request, early, conn, deadline)
+		var stalled *stageStalled
+		if !goerrors.As(err, &stalled) {
+			return finish(conn, udp, err)
+		}
+		// 上游不再吃错开发送：降级、到期再测，这一次逐段重连。
+		c.caps.demote()
+		errors.LogWarningInner(ctx, err, "socks upstream ", dest, " stalled on a staggered handshake; sequential until rechecked")
+		conn.Close()
+		if conn, err = dial(ctx); err != nil {
+			return nil, nil, err
+		}
+		_ = conn.SetDeadline(time.Now().Add(p.Timeouts.Handshake))
 	}
-	udp, err := ClientHandshakePipelined(request, conn, conn, deadline)
-	if err == nil {
-		c.pipeline.proven.Store(true)
-		return conn, udp, nil
-	}
-	if !c.pipeline.suspect(err) {
-		return finish(conn, udp, err)
-	}
-	// 换一条连接逐段握手；逐段成功才说明是流水线的问题，记住这个上游。
-	cause := err
-	conn.Close()
-	if conn, err = dial(ctx); err != nil {
-		return nil, nil, err
-	}
-	_ = conn.SetDeadline(time.Now().Add(p.Timeouts.Handshake))
-	if udp, err = ClientHandshake(request, conn, conn); err == nil {
-		c.pipeline.reject(time.Now())
-		errors.LogWarningInner(ctx, cause, "socks upstream ", dest, " needs a sequential handshake; not pipelining for ", pipelineBackoff)
+	udp, err := ClientHandshake(request, conn, conn)
+	if err == nil && len(early) > 0 {
+		_, err = conn.Write(early)
 	}
 	return finish(conn, udp, err)
 }

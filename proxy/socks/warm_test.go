@@ -72,17 +72,3 @@ func TestWarmPoolFollowsDemand(t *testing.T) {
 		t.Fatal("repeated stale connections must disable the pool")
 	}
 }
-
-func TestPipelineSuspect(t *testing.T) {
-	s := &pipelineState{}
-	if !s.suspect(&pipelineRejected{errors.New("eof")}) || !s.suspect(errors.New("i/o timeout")) {
-		t.Fatal("unproven upstream: early failures and request-stage timeouts are suspects")
-	}
-	if s.suspect(&handshakeRefused{"server rejects request: 5"}) {
-		t.Fatal("an explicit refusal is never the pipeline's fault")
-	}
-	s.proven.Store(true)
-	if s.suspect(errors.New("i/o timeout")) {
-		t.Fatal("proven upstream: request-stage failures are real")
-	}
-}
