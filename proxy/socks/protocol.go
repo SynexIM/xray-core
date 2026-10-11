@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"io"
 	gonet "net"
+	"strconv"
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
@@ -523,7 +524,7 @@ func readServerReply(request *protocol.RequestHeader, reader io.Reader) (*protoc
 
 	resp := b.Byte(1)
 	if resp != 0x00 {
-		return nil, errors.New("server rejects request: ", resp)
+		return nil, &handshakeRefused{"server rejects request: " + strconv.Itoa(int(resp))}
 	}
 
 	b.Clear()

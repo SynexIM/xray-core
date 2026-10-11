@@ -2,7 +2,6 @@ package socks
 
 import (
 	"context"
-	goerrors "errors"
 	"time"
 
 	"github.com/xtls/xray-core/common"
@@ -10,7 +9,6 @@ import (
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/protocol"
-	"github.com/xtls/xray-core/common/retry"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/common/signal"
 	"github.com/xtls/xray-core/common/task"
@@ -18,7 +16,6 @@ import (
 	"github.com/xtls/xray-core/features/policy"
 	"github.com/xtls/xray-core/transport"
 	"github.com/xtls/xray-core/transport/internet"
-	"github.com/xtls/xray-core/transport/internet/stat"
 )
 
 // Client is a Socks5 client.
@@ -26,6 +23,7 @@ type Client struct {
 	server        *protocol.ServerSpec
 	policyManager policy.Manager
 	pipeline      *pipelineState
+	warm          *warmPool
 }
 
 // NewClient create a new Socks5 client based on the given config.
@@ -43,6 +41,7 @@ func NewClient(ctx context.Context, config *ClientConfig) (*Client, error) {
 		server:        server,
 		policyManager: v.GetFeature(policy.ManagerType()).(policy.Manager),
 		pipeline:      &pipelineState{disabled: config.NoPipeline},
+		warm:          &warmPool{disabled: config.NoPrewarm},
 	}
 
 	return c, nil
@@ -63,30 +62,6 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 	// Outbound server.
 	server := c.server
 	dest := server.Destination
-	// Connection to the outbound server.
-	var conn stat.Connection
-	dial := func() error {
-		if err := retry.ExponentialBackoff(5, 100).On(func() error {
-			rawConn, err := dialer.Dial(ctx, dest)
-			if err != nil {
-				return err
-			}
-			conn = rawConn
-			return nil
-		}); err != nil {
-			return errors.New("failed to find an available destination").Base(err)
-		}
-		return nil
-	}
-	if err := dial(); err != nil {
-		return err
-	}
-
-	defer func() {
-		if err := conn.Close(); err != nil {
-			errors.LogInfoInner(ctx, err, "failed to closed connection")
-		}
-	}()
 
 	p := c.policyManager.ForLevel(0)
 
@@ -107,34 +82,16 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 		p = c.policyManager.ForLevel(user.Level)
 	}
 
-	deadline := time.Now().Add(p.Timeouts.Handshake)
-	if err := conn.SetDeadline(deadline); err != nil {
-		errors.LogInfoInner(ctx, err, "failed to set deadline for handshake")
-	}
-	var udpRequest *protocol.RequestHeader
-	var err error
-	if c.pipeline.usable(time.Now()) {
-		udpRequest, err = ClientHandshakePipelined(request, conn, conn, deadline)
-		if rejected := (*pipelineRejected)(nil); goerrors.As(err, &rejected) {
-			// 换一条连接逐段握手；逐段成功才说明是流水线的问题，记住这个上游。
-			conn.Close()
-			if err := dial(); err != nil {
-				return err
-			}
-			if err := conn.SetDeadline(time.Now().Add(p.Timeouts.Handshake)); err != nil {
-				errors.LogInfoInner(ctx, err, "failed to set deadline for handshake")
-			}
-			if udpRequest, err = ClientHandshake(request, conn, conn); err == nil {
-				c.pipeline.reject(time.Now())
-				errors.LogWarningInner(ctx, rejected, "socks upstream ", dest, " needs a sequential handshake; not pipelining for ", pipelineBackoff)
-			}
-		}
-	} else {
-		udpRequest, err = ClientHandshake(request, conn, conn)
-	}
+	// Connection to the outbound server, with the request already answered (fork: warm.go).
+	conn, udpRequest, err := c.connect(ctx, dialer, request, p)
 	if err != nil {
 		return errors.New("failed to establish connection to server").Base(err)
 	}
+	defer func() {
+		if err := conn.Close(); err != nil {
+			errors.LogInfoInner(ctx, err, "failed to closed connection")
+		}
+	}()
 	if udpRequest != nil {
 		if udpRequest.Address == net.AnyIP || udpRequest.Address == net.AnyIPv6 {
 			udpRequest.Address = dest.Address

@@ -92,10 +92,15 @@ type SocksClientConfig struct {
 	Servers  []*SocksRemoteConfig `json:"servers"`
 	// Pipeline（fork）：握手三段一次发出，省两个来回；默认开、上游不支持自动退回，写 false 才关。
 	Pipeline *bool `json:"pipeline"`
+	// Prewarm（fork）：按需求预先建好已认证的上游连接，省掉 TCP 握手；默认开、自动回退，写 false 才关。
+	Prewarm *bool `json:"prewarm"`
 }
 
 func (v *SocksClientConfig) Build() (proto.Message, error) {
-	config := &socks.ClientConfig{NoPipeline: v.Pipeline != nil && !*v.Pipeline}
+	config := &socks.ClientConfig{
+		NoPipeline: v.Pipeline != nil && !*v.Pipeline,
+		NoPrewarm:  v.Prewarm != nil && !*v.Prewarm,
+	}
 	if v.Address != nil {
 		v.Servers = []*SocksRemoteConfig{
 			{

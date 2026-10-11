@@ -51,4 +51,7 @@ message ClientConfig {
   // The handshake is pipelined by default with automatic fallback (fork; see
   // pipeline.go). no_pipeline turns it off for this outbound.
   bool no_pipeline = 2;
+  // Authenticated connections are kept warm by default (fork; see warm.go).
+  // no_prewarm turns it off for this outbound.
+  bool no_prewarm = 3;
 }
