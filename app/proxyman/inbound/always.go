@@ -3,6 +3,7 @@ package inbound
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/xtls/xray-core/app/proxyman"
 	"github.com/xtls/xray-core/common"
@@ -50,6 +51,7 @@ type AlwaysOnInboundHandler struct {
 	closed         bool
 	proxyConfig    interface{}
 	receiverConfig *proxyman.ReceiverConfig
+	sniffing       *atomic.Pointer[session.SniffingRequest]
 	proxy          proxy.Inbound
 	workers        []worker
 	mux            *mux.Server
@@ -61,6 +63,8 @@ func NewAlwaysOnInboundHandler(ctx context.Context, tag string, receiverConfig *
 	if err != nil {
 		return nil, err
 	}
+	sniffing := &atomic.Pointer[session.SniffingRequest]{}
+	sniffing.Store(&sniffingRequest)
 	src := net.TCPDestination(net.AnyIP, 0)
 	if receiverConfig.Listen != nil {
 		src.Address = receiverConfig.Listen.AsAddress()
@@ -88,6 +92,7 @@ func NewAlwaysOnInboundHandler(ctx context.Context, tag string, receiverConfig *
 
 	h := &AlwaysOnInboundHandler{
 		receiverConfig: receiverConfig,
+		sniffing:       sniffing,
 		proxyConfig:    proxyConfig,
 		proxy:          p,
 		mux:            mux.NewServer(ctx),
@@ -122,7 +127,7 @@ func NewAlwaysOnInboundHandler(ctx context.Context, tag string, receiverConfig *
 				stream:          mss,
 				tag:             tag,
 				dispatcher:      h.mux,
-				sniffingRequest: sniffingRequest,
+				sniffing:        sniffing,
 				uplinkCounter:   uplinkCounter,
 				downlinkCounter: downlinkCounter,
 				ctx:             ctx,
@@ -144,7 +149,7 @@ func NewAlwaysOnInboundHandler(ctx context.Context, tag string, receiverConfig *
 						recvOrigDest:    receiverConfig.ReceiveOriginalDestination,
 						tag:             tag,
 						dispatcher:      h.mux,
-						sniffingRequest: sniffingRequest,
+						sniffing:        sniffing,
 						uplinkCounter:   uplinkCounter,
 						downlinkCounter: downlinkCounter,
 						ctx:             ctx,
@@ -159,7 +164,7 @@ func NewAlwaysOnInboundHandler(ctx context.Context, tag string, receiverConfig *
 						address:         address,
 						port:            net.Port(port),
 						dispatcher:      h.mux,
-						sniffingRequest: sniffingRequest,
+						sniffing:        sniffing,
 						uplinkCounter:   uplinkCounter,
 						downlinkCounter: downlinkCounter,
 						stream:          mss,
@@ -230,7 +235,32 @@ func (h *AlwaysOnInboundHandler) GetInbound() proxy.Inbound {
 
 // ReceiverSettings implements inbound.Handler.
 func (h *AlwaysOnInboundHandler) ReceiverSettings() *serial.TypedMessage {
+	h.lifecycle.Lock()
+	defer h.lifecycle.Unlock()
 	return serial.ToTypedMessage(h.receiverConfig)
+}
+
+// UpdateReceiver changes only sniffing. All socket/protocol settings must match,
+// so the listener, user tables and established sessions remain owned by h.
+func (h *AlwaysOnInboundHandler) UpdateReceiver(next *proxyman.ReceiverConfig) error {
+	request, err := proxyman.BuildSniffingRequest(next.SniffingSettings)
+	if err != nil {
+		return err
+	}
+	h.lifecycle.Lock()
+	defer h.lifecycle.Unlock()
+	if h.closed {
+		return errors.New("handler is closed")
+	}
+	oldBase := proto.Clone(h.receiverConfig).(*proxyman.ReceiverConfig)
+	nextBase := proto.Clone(next).(*proxyman.ReceiverConfig)
+	oldBase.SniffingSettings, nextBase.SniffingSettings = nil, nil
+	if !proto.Equal(oldBase, nextBase) {
+		return errors.New("listener/transport changes require rebuilding")
+	}
+	h.receiverConfig = proto.Clone(next).(*proxyman.ReceiverConfig)
+	h.sniffing.Store(&request)
+	return nil
 }
 
 // ProxySettings implements inbound.Handler.

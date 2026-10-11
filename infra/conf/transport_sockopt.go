@@ -44,6 +44,7 @@ func (h *HappyEyeballsConfig) UnmarshalJSON(data []byte) error {
 
 type SocketConfig struct {
 	Mark                  int32                  `json:"mark"`
+	TCPFingerprint        string                 `json:"tcpFingerprint"`
 	TFO                   interface{}            `json:"tcpFastOpen"`
 	TProxy                string                 `json:"tproxy"`
 	AcceptProxyProtocol   bool                   `json:"acceptProxyProtocol"`
@@ -162,7 +163,7 @@ func (c *SocketConfig) Build() (*internet.SocketConfig, error) {
 		happyEyeballs.MaxConcurrentTry = c.HappyEyeballsSettings.MaxConcurrentTry
 	}
 
-	return &internet.SocketConfig{
+	out := &internet.SocketConfig{
 		Mark:                 c.Mark,
 		Tfo:                  tfo,
 		Tproxy:               tproxy,
@@ -183,5 +184,9 @@ func (c *SocketConfig) Build() (*internet.SocketConfig, error) {
 		AddressPortStrategy:  addressPortStrategy,
 		HappyEyeballs:        happyEyeballs,
 		TrustedXForwardedFor: c.TrustedXForwardedFor,
-	}, nil
+	}
+	if err := c.applyFingerprint(out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

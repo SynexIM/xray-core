@@ -140,9 +140,19 @@ func (s *routingServer) BatchRemoveRule(ctx context.Context, request *BatchRemov
 	response := &BatchRuleResponse{
 		Results: make([]*BatchRuleOperationResult, 0, len(request.RuleTags)),
 	}
+	var batchErrs []error
+	if batch, ok := s.router.(interface{ RemoveRules([]string) []error }); ok {
+		batchErrs = batch.RemoveRules(request.RuleTags)
+	}
 	for i, tag := range request.RuleTags {
 		result := &BatchRuleOperationResult{Index: uint32(i)}
-		if err := bo.RemoveRule(tag); err != nil {
+		var err error
+		if batchErrs != nil {
+			err = batchErrs[i]
+		} else {
+			err = bo.RemoveRule(tag)
+		}
+		if err != nil {
 			result.Success = false
 			result.Error = err.Error()
 		} else {

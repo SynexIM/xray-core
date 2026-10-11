@@ -38,6 +38,11 @@ message UpdateUserOperation {
   xray.common.protocol.User user = 1;
 }
 
+// Updates only supported receiver policies; listener/auth changes are rejected.
+message UpdateInboundOperation {
+  core.InboundHandlerConfig inbound = 1;
+}
+
 message AddInboundRequest {
   core.InboundHandlerConfig inbound = 1;
 }

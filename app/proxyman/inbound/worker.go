@@ -42,7 +42,7 @@ type tcpWorker struct {
 	recvOrigDest    bool
 	tag             string
 	dispatcher      routing.Dispatcher
-	sniffingRequest session.SniffingRequest
+	sniffing        *atomic.Pointer[session.SniffingRequest]
 	uplinkCounter   stats.Counter
 	downlinkCounter stats.Counter
 
@@ -119,7 +119,7 @@ func (w *tcpWorker) callback(conn stat.Connection) {
 	})
 
 	content := new(session.Content)
-	content.SniffingRequest = w.sniffingRequest
+	content.SniffingRequest = currentSniffing(w.sniffing)
 	ctx = session.ContextWithContent(ctx, content)
 
 	if err := w.proxy.Process(ctx, net.Network_TCP, conn, w.dispatcher); err != nil {
@@ -274,7 +274,7 @@ type udpWorker struct {
 	tag             string
 	stream          *internet.MemoryStreamConfig
 	dispatcher      routing.Dispatcher
-	sniffingRequest session.SniffingRequest
+	sniffing        *atomic.Pointer[session.SniffingRequest]
 	uplinkCounter   stats.Counter
 	downlinkCounter stats.Counter
 
@@ -372,7 +372,7 @@ func (w *udpWorker) callback(b *buf.Buffer, source net.Destination, originalDest
 				Tag:     w.tag,
 			})
 			content := new(session.Content)
-			content.SniffingRequest = w.sniffingRequest
+			content.SniffingRequest = currentSniffing(w.sniffing)
 			ctx = session.ContextWithContent(ctx, content)
 			if err := w.proxy.Process(ctx, net.Network_UDP, conn, w.dispatcher); err != nil {
 				errors.LogInfoInner(ctx, err, "connection ends")
@@ -488,7 +488,7 @@ type dsWorker struct {
 	stream          *internet.MemoryStreamConfig
 	tag             string
 	dispatcher      routing.Dispatcher
-	sniffingRequest session.SniffingRequest
+	sniffing        *atomic.Pointer[session.SniffingRequest]
 	uplinkCounter   stats.Counter
 	downlinkCounter stats.Counter
 
@@ -520,7 +520,7 @@ func (w *dsWorker) callback(conn stat.Connection) {
 	})
 
 	content := new(session.Content)
-	content.SniffingRequest = w.sniffingRequest
+	content.SniffingRequest = currentSniffing(w.sniffing)
 	ctx = session.ContextWithContent(ctx, content)
 
 	if err := w.proxy.Process(ctx, net.Network_UNIX, conn, w.dispatcher); err != nil {
@@ -588,4 +588,13 @@ func IsLocal(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+func currentSniffing(p *atomic.Pointer[session.SniffingRequest]) session.SniffingRequest {
+	if p != nil {
+		if request := p.Load(); request != nil {
+			return *request
+		}
+	}
+	return session.SniffingRequest{}
 }

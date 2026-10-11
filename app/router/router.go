@@ -247,10 +247,21 @@ func (r *Router) buildConfig(config *Config, balancers map[string]*Balancer, exi
 
 // RemoveRule implements routing.Router.
 func (r *Router) RemoveRule(tag string) error {
-	if tag == "" {
-		return errors.New("empty tag name!")
-	}
+	return r.RemoveRules([]string{tag})[0]
+}
 
+// RemoveRules publishes one snapshot for the entire batch. Missing tags remain
+// idempotent; malformed entries fail at their own index without blocking others.
+func (r *Router) RemoveRules(tags []string) []error {
+	errs := make([]error, len(tags))
+	wanted := make(map[string]bool, len(tags))
+	for i, tag := range tags {
+		if tag == "" {
+			errs[i] = errors.New("empty tag name!")
+		} else {
+			wanted[tag] = true
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -258,15 +269,17 @@ func (r *Router) RemoveRule(tag string) error {
 	newRules := make([]*Rule, 0, len(oldRules))
 	var removed []*Rule
 	for _, rule := range oldRules {
-		if rule.RuleTag != tag {
+		if !wanted[rule.RuleTag] {
 			newRules = append(newRules, rule)
 		} else {
 			removed = append(removed, rule)
 		}
 	}
-	r.rules.Store(newRuleSet(newRules))
-	closeWebhooks(removed)
-	return nil
+	if len(removed) > 0 {
+		r.rules.Store(newRuleSet(newRules))
+		closeWebhooks(removed)
+	}
+	return errs
 }
 
 // ListRule implements routing.Router
@@ -291,16 +304,22 @@ func (r *Router) ReplaceRule(message *serial.TypedMessage) error {
 		return err
 	}
 	config, ok := value.(*Config)
-	if !ok || len(config.Rule) != 1 || config.Rule[0].RuleTag == "" || len(config.BalancingRule) != 0 {
-		return errors.New("replacement needs one named rule")
+	if !ok || len(config.Rule) == 0 || len(config.BalancingRule) != 0 {
+		return errors.New("replacement needs named rules")
+	}
+	tags := make(map[string]bool, len(config.Rule))
+	for _, rule := range config.Rule {
+		if rule.RuleTag == "" || tags[rule.RuleTag] {
+			return errors.New("replacement needs distinct nonempty rule tags")
+		}
+		tags[rule.RuleTag] = true
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	old := r.rules.Load().all
-	tag := config.Rule[0].RuleTag
 	existing := make(map[string]bool, len(old))
 	for _, rule := range old {
-		if rule.RuleTag != tag {
+		if !tags[rule.RuleTag] {
 			existing[rule.RuleTag] = true
 		}
 	}
@@ -308,20 +327,25 @@ func (r *Router) ReplaceRule(message *serial.TypedMessage) error {
 	if err != nil {
 		return err
 	}
-	next := make([]*Rule, 0, len(old)+1)
-	replaced := false
+	next := make([]*Rule, 0, len(old)+len(added))
+	replacements := make(map[string]*Rule, len(added))
+	for _, rule := range added {
+		replacements[rule.RuleTag] = rule
+	}
 	removed := []*Rule{}
 	for _, rule := range old {
-		if rule.RuleTag == tag {
-			next = append(next, added[0])
+		if replacement := replacements[rule.RuleTag]; replacement != nil {
+			next = append(next, replacement)
 			removed = append(removed, rule)
-			replaced = true
+			delete(replacements, rule.RuleTag)
 		} else {
 			next = append(next, rule)
 		}
 	}
-	if !replaced {
-		next = append(next, added[0])
+	for _, rule := range added {
+		if replacements[rule.RuleTag] != nil {
+			next = append(next, rule)
+		}
 	}
 	r.rules.Store(newRuleSet(next))
 	closeWebhooks(removed)

@@ -85,6 +85,14 @@ JSON 的速率用带单位字符串、时间用 Go 时长；protobuf 用 bit/s �
 | `infra/conf/api.go`、`main/distro/all/all.go` | 新 app 与 command service 的注册 |
 | `.github/workflows/*`、README、RELEASE | fork 自有发布、镜像与安全边界 |
 
+## 节点规模与 TCP 模板（2026-10-11）
+
+- `infra/conf/transport_fingerprint.go` 将 `sockopt.tcpFingerprint` 的 none/windows/macos/android 编为原生 SO_MARK、TCP_WINDOW_CLAMP、必要的 SO_RCVBUF；普通 mark 不变，冲突参数拒绝。TCP 字节转换由独立 agent 的 tc 程序负责，不扩展 socket proto。模板不能代表完整操作系统行为。
+- `app/router` 的批量删除与命名替换只发布一次不可变快照；失败的替换不发布、旧规则保留位置，新规则按请求顺序追加。单条修改依然 O(N)。1000 条删除、表长 100000 的本机基准从 7004.053ms 到 9.5839ms。
+- `UpdateInboundOperation` 仅原地修改嗅探策略，worker 原子读取；监听器、代理配置和账户变化拒绝。能力 `inbound.hotReload`，真实 SOCKS 用户与长连接测试通过。
+- SS2022 上游已有 O(1) 身份与 email 索引，本阶段不再改它；百万账户基准只验证现有结构。
+- 健康基线：相对 v26.10.10，修改原有上游 Go/proto 文件 53 个，+1780/−246 行；不计新增文件、测试、生成 pb 与资产。目标是逐步减少上游挂钩，而非把新目录代码计为上游改动。
+
 ## REALITY 与上游更新
 
 直接使用上游 REALITY，无闭源依赖。上游自 v26.9.9 所用版本已将记录缓冲区扩大到 `17 * 1024`，旧 SynexIM replace 已移除。
