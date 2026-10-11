@@ -9,6 +9,7 @@ import (
 	loggerservice "github.com/xtls/xray-core/app/log/command"
 	observatoryservice "github.com/xtls/xray-core/app/observatory/command"
 	policyservice "github.com/xtls/xray-core/app/policy/command"
+	probeservice "github.com/xtls/xray-core/app/probe/command"
 	handlerservice "github.com/xtls/xray-core/app/proxyman/command"
 	reverseservice "github.com/xtls/xray-core/app/reverse/command"
 	routerservice "github.com/xtls/xray-core/app/router/command"
@@ -49,6 +50,8 @@ func (c *APIConfig) Build() (*commander.Config, error) {
 			services = append(services, serial.ToTypedMessage(&reverseservice.Config{}))
 		case "policyservice":
 			services = append(services, serial.ToTypedMessage(&policyservice.Config{}))
+		case "probeservice":
+			services = append(services, serial.ToTypedMessage(&probeservice.Config{}))
 		case "capabilityservice":
 			services = append(services, serial.ToTypedMessage(&capabilityservice.Config{}))
 		default:

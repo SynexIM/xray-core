@@ -90,10 +90,12 @@ type SocksClientConfig struct {
 	Username string               `json:"user"`
 	Password string               `json:"pass"`
 	Servers  []*SocksRemoteConfig `json:"servers"`
+	// Pipeline（fork）：握手三段一次发出，省两个来回；默认开、上游不支持自动退回，写 false 才关。
+	Pipeline *bool `json:"pipeline"`
 }
 
 func (v *SocksClientConfig) Build() (proto.Message, error) {
-	config := new(socks.ClientConfig)
+	config := &socks.ClientConfig{NoPipeline: v.Pipeline != nil && !*v.Pipeline}
 	if v.Address != nil {
 		v.Servers = []*SocksRemoteConfig{
 			{

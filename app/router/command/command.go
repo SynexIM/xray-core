@@ -5,6 +5,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/xtls/xray-core/app/router"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/serial"
@@ -190,6 +191,25 @@ func (s *routingServer) ListRuleFull(ctx context.Context, request *ListRuleFullR
 		})
 	}
 	return response, nil
+}
+
+type balancerWriter interface {
+	PutBalancers([]*router.BalancingRule) error
+	RemoveBalancers([]string) error
+}
+
+func (s *routingServer) PutBalancers(ctx context.Context, request *PutBalancersRequest) (*PutBalancersResponse, error) {
+	if w, ok := s.router.(balancerWriter); ok {
+		return &PutBalancersResponse{}, w.PutBalancers(request.Balancers)
+	}
+	return nil, errors.New("router cannot update balancers")
+}
+
+func (s *routingServer) RemoveBalancers(ctx context.Context, request *RemoveBalancersRequest) (*RemoveBalancersResponse, error) {
+	if w, ok := s.router.(balancerWriter); ok {
+		return &RemoveBalancersResponse{}, w.RemoveBalancers(request.Tags)
+	}
+	return nil, errors.New("router cannot update balancers")
 }
 
 // NewRoutingServer creates a statistics service with statistics manager.

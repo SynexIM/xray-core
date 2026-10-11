@@ -16,6 +16,7 @@ import (
 	_ "github.com/xtls/xray-core/app/commander"
 	_ "github.com/xtls/xray-core/app/log/command"
 	_ "github.com/xtls/xray-core/app/policy/command"
+	_ "github.com/xtls/xray-core/app/probe/command"
 	_ "github.com/xtls/xray-core/app/proxyman/command"
 	_ "github.com/xtls/xray-core/app/stats/command"
 

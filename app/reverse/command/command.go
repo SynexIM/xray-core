@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 
+	"github.com/xtls/xray-core/app/capability"
 	"github.com/xtls/xray-core/app/reverse"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/errors"
@@ -96,6 +97,7 @@ func (s *service) Register(server *grpc.Server) {
 }
 
 func init() {
+	capability.Register("reverse.hotReload")
 	common.Must(common.RegisterConfig((*Config)(nil), func(ctx context.Context, cfg interface{}) (interface{}, error) {
 		return &service{v: core.MustFromContext(ctx)}, nil
 	}))

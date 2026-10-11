@@ -7,6 +7,7 @@
 package command
 
 import (
+	router "github.com/xtls/xray-core/app/router"
 	net "github.com/xtls/xray-core/common/net"
 	serial "github.com/xtls/xray-core/common/serial"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -1308,6 +1309,169 @@ func (x *ListRuleFullResponse) GetRules() []*FullRuleItem {
 	return nil
 }
 
+// PutBalancers adds balancers or replaces the ones with the same tag; rules
+// pointing at a replaced balancer switch to the new one in the same snapshot.
+type PutBalancersRequest struct {
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	Balancers     []*router.BalancingRule `protobuf:"bytes,1,rep,name=balancers,proto3" json:"balancers,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PutBalancersRequest) Reset() {
+	*x = PutBalancersRequest{}
+	mi := &file_app_router_command_command_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PutBalancersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutBalancersRequest) ProtoMessage() {}
+
+func (x *PutBalancersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_app_router_command_command_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PutBalancersRequest.ProtoReflect.Descriptor instead.
+func (*PutBalancersRequest) Descriptor() ([]byte, []int) {
+	return file_app_router_command_command_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *PutBalancersRequest) GetBalancers() []*router.BalancingRule {
+	if x != nil {
+		return x.Balancers
+	}
+	return nil
+}
+
+type PutBalancersResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PutBalancersResponse) Reset() {
+	*x = PutBalancersResponse{}
+	mi := &file_app_router_command_command_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PutBalancersResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutBalancersResponse) ProtoMessage() {}
+
+func (x *PutBalancersResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_app_router_command_command_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PutBalancersResponse.ProtoReflect.Descriptor instead.
+func (*PutBalancersResponse) Descriptor() ([]byte, []int) {
+	return file_app_router_command_command_proto_rawDescGZIP(), []int{25}
+}
+
+// RemoveBalancers is idempotent and refuses balancers still used by a rule.
+type RemoveBalancersRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tags          []string               `protobuf:"bytes,1,rep,name=tags,proto3" json:"tags,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveBalancersRequest) Reset() {
+	*x = RemoveBalancersRequest{}
+	mi := &file_app_router_command_command_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveBalancersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveBalancersRequest) ProtoMessage() {}
+
+func (x *RemoveBalancersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_app_router_command_command_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveBalancersRequest.ProtoReflect.Descriptor instead.
+func (*RemoveBalancersRequest) Descriptor() ([]byte, []int) {
+	return file_app_router_command_command_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *RemoveBalancersRequest) GetTags() []string {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
+}
+
+type RemoveBalancersResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveBalancersResponse) Reset() {
+	*x = RemoveBalancersResponse{}
+	mi := &file_app_router_command_command_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveBalancersResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveBalancersResponse) ProtoMessage() {}
+
+func (x *RemoveBalancersResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_app_router_command_command_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveBalancersResponse.ProtoReflect.Descriptor instead.
+func (*RemoveBalancersResponse) Descriptor() ([]byte, []int) {
+	return file_app_router_command_command_proto_rawDescGZIP(), []int{27}
+}
+
 type Config struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1316,7 +1480,7 @@ type Config struct {
 
 func (x *Config) Reset() {
 	*x = Config{}
-	mi := &file_app_router_command_command_proto_msgTypes[24]
+	mi := &file_app_router_command_command_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1328,7 +1492,7 @@ func (x *Config) String() string {
 func (*Config) ProtoMessage() {}
 
 func (x *Config) ProtoReflect() protoreflect.Message {
-	mi := &file_app_router_command_command_proto_msgTypes[24]
+	mi := &file_app_router_command_command_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1341,14 +1505,14 @@ func (x *Config) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Config.ProtoReflect.Descriptor instead.
 func (*Config) Descriptor() ([]byte, []int) {
-	return file_app_router_command_command_proto_rawDescGZIP(), []int{24}
+	return file_app_router_command_command_proto_rawDescGZIP(), []int{28}
 }
 
 var File_app_router_command_command_proto protoreflect.FileDescriptor
 
 const file_app_router_command_command_proto_rawDesc = "" +
 	"\n" +
-	" app/router/command/command.proto\x12\x17xray.app.router.command\x1a\x18common/net/network.proto\x1a!common/serial/typed_message.proto\"\xf6\x04\n" +
+	" app/router/command/command.proto\x12\x17xray.app.router.command\x1a\x18common/net/network.proto\x1a!common/serial/typed_message.proto\x1a\x17app/router/config.proto\"\xf6\x04\n" +
 	"\x0eRoutingContext\x12\x1e\n" +
 	"\n" +
 	"InboundTag\x18\x01 \x01(\tR\n" +
@@ -1436,8 +1600,15 @@ const file_app_router_command_command_proto_rawDesc = "" +
 	"inboundTag\x12#\n" +
 	"\rnative_config\x18\x05 \x01(\fR\fnativeConfig\"S\n" +
 	"\x14ListRuleFullResponse\x12;\n" +
-	"\x05rules\x18\x01 \x03(\v2%.xray.app.router.command.FullRuleItemR\x05rules\"\b\n" +
-	"\x06Config2\xef\b\n" +
+	"\x05rules\x18\x01 \x03(\v2%.xray.app.router.command.FullRuleItemR\x05rules\"S\n" +
+	"\x13PutBalancersRequest\x12<\n" +
+	"\tbalancers\x18\x01 \x03(\v2\x1e.xray.app.router.BalancingRuleR\tbalancers\"\x16\n" +
+	"\x14PutBalancersResponse\",\n" +
+	"\x16RemoveBalancersRequest\x12\x12\n" +
+	"\x04tags\x18\x01 \x03(\tR\x04tags\"\x19\n" +
+	"\x17RemoveBalancersResponse\"\b\n" +
+	"\x06Config2\xd6\n" +
+	"\n" +
 	"\x0eRoutingService\x12{\n" +
 	"\x15SubscribeRoutingStats\x125.xray.app.router.command.SubscribeRoutingStatsRequest\x1a'.xray.app.router.command.RoutingContext\"\x000\x01\x12a\n" +
 	"\tTestRoute\x12).xray.app.router.command.TestRouteRequest\x1a'.xray.app.router.command.RoutingContext\"\x00\x12v\n" +
@@ -1449,7 +1620,9 @@ const file_app_router_command_command_proto_rawDesc = "" +
 	"\fBatchAddRule\x12,.xray.app.router.command.BatchAddRuleRequest\x1a*.xray.app.router.command.BatchRuleResponse\"\x00\x12p\n" +
 	"\x0fBatchRemoveRule\x12/.xray.app.router.command.BatchRemoveRuleRequest\x1a*.xray.app.router.command.BatchRuleResponse\"\x00\x12a\n" +
 	"\bListRule\x12(.xray.app.router.command.ListRuleRequest\x1a).xray.app.router.command.ListRuleResponse\"\x00\x12m\n" +
-	"\fListRuleFull\x12,.xray.app.router.command.ListRuleFullRequest\x1a-.xray.app.router.command.ListRuleFullResponse\"\x00Bg\n" +
+	"\fListRuleFull\x12,.xray.app.router.command.ListRuleFullRequest\x1a-.xray.app.router.command.ListRuleFullResponse\"\x00\x12m\n" +
+	"\fPutBalancers\x12,.xray.app.router.command.PutBalancersRequest\x1a-.xray.app.router.command.PutBalancersResponse\"\x00\x12v\n" +
+	"\x0fRemoveBalancers\x12/.xray.app.router.command.RemoveBalancersRequest\x1a0.xray.app.router.command.RemoveBalancersResponse\"\x00Bg\n" +
 	"\x1bcom.xray.app.router.commandP\x01Z,github.com/xtls/xray-core/app/router/command\xaa\x02\x17Xray.App.Router.Commandb\x06proto3"
 
 var (
@@ -1464,7 +1637,7 @@ func file_app_router_command_command_proto_rawDescGZIP() []byte {
 	return file_app_router_command_command_proto_rawDescData
 }
 
-var file_app_router_command_command_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_app_router_command_command_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_app_router_command_command_proto_goTypes = []any{
 	(*RoutingContext)(nil),                 // 0: xray.app.router.command.RoutingContext
 	(*SubscribeRoutingStatsRequest)(nil),   // 1: xray.app.router.command.SubscribeRoutingStatsRequest
@@ -1490,48 +1663,58 @@ var file_app_router_command_command_proto_goTypes = []any{
 	(*ListRuleFullRequest)(nil),            // 21: xray.app.router.command.ListRuleFullRequest
 	(*FullRuleItem)(nil),                   // 22: xray.app.router.command.FullRuleItem
 	(*ListRuleFullResponse)(nil),           // 23: xray.app.router.command.ListRuleFullResponse
-	(*Config)(nil),                         // 24: xray.app.router.command.Config
-	nil,                                    // 25: xray.app.router.command.RoutingContext.AttributesEntry
-	(net.Network)(0),                       // 26: xray.common.net.Network
-	(*serial.TypedMessage)(nil),            // 27: xray.common.serial.TypedMessage
+	(*PutBalancersRequest)(nil),            // 24: xray.app.router.command.PutBalancersRequest
+	(*PutBalancersResponse)(nil),           // 25: xray.app.router.command.PutBalancersResponse
+	(*RemoveBalancersRequest)(nil),         // 26: xray.app.router.command.RemoveBalancersRequest
+	(*RemoveBalancersResponse)(nil),        // 27: xray.app.router.command.RemoveBalancersResponse
+	(*Config)(nil),                         // 28: xray.app.router.command.Config
+	nil,                                    // 29: xray.app.router.command.RoutingContext.AttributesEntry
+	(net.Network)(0),                       // 30: xray.common.net.Network
+	(*serial.TypedMessage)(nil),            // 31: xray.common.serial.TypedMessage
+	(*router.BalancingRule)(nil),           // 32: xray.app.router.BalancingRule
 }
 var file_app_router_command_command_proto_depIdxs = []int32{
-	26, // 0: xray.app.router.command.RoutingContext.Network:type_name -> xray.common.net.Network
-	25, // 1: xray.app.router.command.RoutingContext.Attributes:type_name -> xray.app.router.command.RoutingContext.AttributesEntry
+	30, // 0: xray.app.router.command.RoutingContext.Network:type_name -> xray.common.net.Network
+	29, // 1: xray.app.router.command.RoutingContext.Attributes:type_name -> xray.app.router.command.RoutingContext.AttributesEntry
 	0,  // 2: xray.app.router.command.TestRouteRequest.RoutingContext:type_name -> xray.app.router.command.RoutingContext
 	4,  // 3: xray.app.router.command.BalancerMsg.override:type_name -> xray.app.router.command.OverrideInfo
 	3,  // 4: xray.app.router.command.BalancerMsg.principle_target:type_name -> xray.app.router.command.PrincipleTargetInfo
 	5,  // 5: xray.app.router.command.GetBalancerInfoResponse.balancer:type_name -> xray.app.router.command.BalancerMsg
-	27, // 6: xray.app.router.command.AddRuleRequest.config:type_name -> xray.common.serial.TypedMessage
+	31, // 6: xray.app.router.command.AddRuleRequest.config:type_name -> xray.common.serial.TypedMessage
 	15, // 7: xray.app.router.command.ListRuleResponse.rules:type_name -> xray.app.router.command.ListRuleItem
-	27, // 8: xray.app.router.command.BatchAddRuleRequest.configs:type_name -> xray.common.serial.TypedMessage
+	31, // 8: xray.app.router.command.BatchAddRuleRequest.configs:type_name -> xray.common.serial.TypedMessage
 	19, // 9: xray.app.router.command.BatchRuleResponse.results:type_name -> xray.app.router.command.BatchRuleOperationResult
 	22, // 10: xray.app.router.command.ListRuleFullResponse.rules:type_name -> xray.app.router.command.FullRuleItem
-	1,  // 11: xray.app.router.command.RoutingService.SubscribeRoutingStats:input_type -> xray.app.router.command.SubscribeRoutingStatsRequest
-	2,  // 12: xray.app.router.command.RoutingService.TestRoute:input_type -> xray.app.router.command.TestRouteRequest
-	6,  // 13: xray.app.router.command.RoutingService.GetBalancerInfo:input_type -> xray.app.router.command.GetBalancerInfoRequest
-	8,  // 14: xray.app.router.command.RoutingService.OverrideBalancerTarget:input_type -> xray.app.router.command.OverrideBalancerTargetRequest
-	10, // 15: xray.app.router.command.RoutingService.AddRule:input_type -> xray.app.router.command.AddRuleRequest
-	12, // 16: xray.app.router.command.RoutingService.RemoveRule:input_type -> xray.app.router.command.RemoveRuleRequest
-	17, // 17: xray.app.router.command.RoutingService.BatchAddRule:input_type -> xray.app.router.command.BatchAddRuleRequest
-	18, // 18: xray.app.router.command.RoutingService.BatchRemoveRule:input_type -> xray.app.router.command.BatchRemoveRuleRequest
-	14, // 19: xray.app.router.command.RoutingService.ListRule:input_type -> xray.app.router.command.ListRuleRequest
-	21, // 20: xray.app.router.command.RoutingService.ListRuleFull:input_type -> xray.app.router.command.ListRuleFullRequest
-	0,  // 21: xray.app.router.command.RoutingService.SubscribeRoutingStats:output_type -> xray.app.router.command.RoutingContext
-	0,  // 22: xray.app.router.command.RoutingService.TestRoute:output_type -> xray.app.router.command.RoutingContext
-	7,  // 23: xray.app.router.command.RoutingService.GetBalancerInfo:output_type -> xray.app.router.command.GetBalancerInfoResponse
-	9,  // 24: xray.app.router.command.RoutingService.OverrideBalancerTarget:output_type -> xray.app.router.command.OverrideBalancerTargetResponse
-	11, // 25: xray.app.router.command.RoutingService.AddRule:output_type -> xray.app.router.command.AddRuleResponse
-	13, // 26: xray.app.router.command.RoutingService.RemoveRule:output_type -> xray.app.router.command.RemoveRuleResponse
-	20, // 27: xray.app.router.command.RoutingService.BatchAddRule:output_type -> xray.app.router.command.BatchRuleResponse
-	20, // 28: xray.app.router.command.RoutingService.BatchRemoveRule:output_type -> xray.app.router.command.BatchRuleResponse
-	16, // 29: xray.app.router.command.RoutingService.ListRule:output_type -> xray.app.router.command.ListRuleResponse
-	23, // 30: xray.app.router.command.RoutingService.ListRuleFull:output_type -> xray.app.router.command.ListRuleFullResponse
-	21, // [21:31] is the sub-list for method output_type
-	11, // [11:21] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	32, // 11: xray.app.router.command.PutBalancersRequest.balancers:type_name -> xray.app.router.BalancingRule
+	1,  // 12: xray.app.router.command.RoutingService.SubscribeRoutingStats:input_type -> xray.app.router.command.SubscribeRoutingStatsRequest
+	2,  // 13: xray.app.router.command.RoutingService.TestRoute:input_type -> xray.app.router.command.TestRouteRequest
+	6,  // 14: xray.app.router.command.RoutingService.GetBalancerInfo:input_type -> xray.app.router.command.GetBalancerInfoRequest
+	8,  // 15: xray.app.router.command.RoutingService.OverrideBalancerTarget:input_type -> xray.app.router.command.OverrideBalancerTargetRequest
+	10, // 16: xray.app.router.command.RoutingService.AddRule:input_type -> xray.app.router.command.AddRuleRequest
+	12, // 17: xray.app.router.command.RoutingService.RemoveRule:input_type -> xray.app.router.command.RemoveRuleRequest
+	17, // 18: xray.app.router.command.RoutingService.BatchAddRule:input_type -> xray.app.router.command.BatchAddRuleRequest
+	18, // 19: xray.app.router.command.RoutingService.BatchRemoveRule:input_type -> xray.app.router.command.BatchRemoveRuleRequest
+	14, // 20: xray.app.router.command.RoutingService.ListRule:input_type -> xray.app.router.command.ListRuleRequest
+	21, // 21: xray.app.router.command.RoutingService.ListRuleFull:input_type -> xray.app.router.command.ListRuleFullRequest
+	24, // 22: xray.app.router.command.RoutingService.PutBalancers:input_type -> xray.app.router.command.PutBalancersRequest
+	26, // 23: xray.app.router.command.RoutingService.RemoveBalancers:input_type -> xray.app.router.command.RemoveBalancersRequest
+	0,  // 24: xray.app.router.command.RoutingService.SubscribeRoutingStats:output_type -> xray.app.router.command.RoutingContext
+	0,  // 25: xray.app.router.command.RoutingService.TestRoute:output_type -> xray.app.router.command.RoutingContext
+	7,  // 26: xray.app.router.command.RoutingService.GetBalancerInfo:output_type -> xray.app.router.command.GetBalancerInfoResponse
+	9,  // 27: xray.app.router.command.RoutingService.OverrideBalancerTarget:output_type -> xray.app.router.command.OverrideBalancerTargetResponse
+	11, // 28: xray.app.router.command.RoutingService.AddRule:output_type -> xray.app.router.command.AddRuleResponse
+	13, // 29: xray.app.router.command.RoutingService.RemoveRule:output_type -> xray.app.router.command.RemoveRuleResponse
+	20, // 30: xray.app.router.command.RoutingService.BatchAddRule:output_type -> xray.app.router.command.BatchRuleResponse
+	20, // 31: xray.app.router.command.RoutingService.BatchRemoveRule:output_type -> xray.app.router.command.BatchRuleResponse
+	16, // 32: xray.app.router.command.RoutingService.ListRule:output_type -> xray.app.router.command.ListRuleResponse
+	23, // 33: xray.app.router.command.RoutingService.ListRuleFull:output_type -> xray.app.router.command.ListRuleFullResponse
+	25, // 34: xray.app.router.command.RoutingService.PutBalancers:output_type -> xray.app.router.command.PutBalancersResponse
+	27, // 35: xray.app.router.command.RoutingService.RemoveBalancers:output_type -> xray.app.router.command.RemoveBalancersResponse
+	24, // [24:36] is the sub-list for method output_type
+	12, // [12:24] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_app_router_command_command_proto_init() }
@@ -1545,7 +1728,7 @@ func file_app_router_command_command_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_app_router_command_command_proto_rawDesc), len(file_app_router_command_command_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   26,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

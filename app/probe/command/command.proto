@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+// app.probe.command 是 fork 能力：经指定出站真实请求一次，供控制面的探测资源使用。
+// observatory 只能在配置了 observatory 段时启用、且只按周期探测；这里不依赖它，随时可用。
+package xray.app.probe.command;
+option go_package = "github.com/xtls/xray-core/app/probe/command";
+
+message ProbeRequest {
+  string outbound_tag = 1;
+  string url = 2;
+  uint32 timeout_ms = 3;
+}
+
+message ProbeResponse {
+  uint32 status_code = 1;
+  uint64 latency_ms = 2;
+  // 响应体的前 256 字节（例如出口 IP 查询服务返回的地址）。
+  bytes body = 3;
+}
+
+service ProbeService {
+  rpc Probe(ProbeRequest) returns (ProbeResponse);
+}
+
+message Config {}

@@ -2,6 +2,7 @@ package socks
 
 import (
 	"context"
+	goerrors "errors"
 	"time"
 
 	"github.com/xtls/xray-core/common"
@@ -24,6 +25,7 @@ import (
 type Client struct {
 	server        *protocol.ServerSpec
 	policyManager policy.Manager
+	pipeline      *pipelineState
 }
 
 // NewClient create a new Socks5 client based on the given config.
@@ -40,6 +42,7 @@ func NewClient(ctx context.Context, config *ClientConfig) (*Client, error) {
 	c := &Client{
 		server:        server,
 		policyManager: v.GetFeature(policy.ManagerType()).(policy.Manager),
+		pipeline:      &pipelineState{disabled: config.NoPipeline},
 	}
 
 	return c, nil
@@ -62,17 +65,21 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 	dest := server.Destination
 	// Connection to the outbound server.
 	var conn stat.Connection
-
-	if err := retry.ExponentialBackoff(5, 100).On(func() error {
-		rawConn, err := dialer.Dial(ctx, dest)
-		if err != nil {
-			return err
+	dial := func() error {
+		if err := retry.ExponentialBackoff(5, 100).On(func() error {
+			rawConn, err := dialer.Dial(ctx, dest)
+			if err != nil {
+				return err
+			}
+			conn = rawConn
+			return nil
+		}); err != nil {
+			return errors.New("failed to find an available destination").Base(err)
 		}
-		conn = rawConn
-
 		return nil
-	}); err != nil {
-		return errors.New("failed to find an available destination").Base(err)
+	}
+	if err := dial(); err != nil {
+		return err
 	}
 
 	defer func() {
@@ -100,10 +107,31 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 		p = c.policyManager.ForLevel(user.Level)
 	}
 
-	if err := conn.SetDeadline(time.Now().Add(p.Timeouts.Handshake)); err != nil {
+	deadline := time.Now().Add(p.Timeouts.Handshake)
+	if err := conn.SetDeadline(deadline); err != nil {
 		errors.LogInfoInner(ctx, err, "failed to set deadline for handshake")
 	}
-	udpRequest, err := ClientHandshake(request, conn, conn)
+	var udpRequest *protocol.RequestHeader
+	var err error
+	if c.pipeline.usable(time.Now()) {
+		udpRequest, err = ClientHandshakePipelined(request, conn, conn, deadline)
+		if rejected := (*pipelineRejected)(nil); goerrors.As(err, &rejected) {
+			// 换一条连接逐段握手；逐段成功才说明是流水线的问题，记住这个上游。
+			conn.Close()
+			if err := dial(); err != nil {
+				return err
+			}
+			if err := conn.SetDeadline(time.Now().Add(p.Timeouts.Handshake)); err != nil {
+				errors.LogInfoInner(ctx, err, "failed to set deadline for handshake")
+			}
+			if udpRequest, err = ClientHandshake(request, conn, conn); err == nil {
+				c.pipeline.reject(time.Now())
+				errors.LogWarningInner(ctx, rejected, "socks upstream ", dest, " needs a sequential handshake; not pipelining for ", pipelineBackoff)
+			}
+		}
+	} else {
+		udpRequest, err = ClientHandshake(request, conn, conn)
+	}
 	if err != nil {
 		return errors.New("failed to establish connection to server").Base(err)
 	}

@@ -276,7 +276,10 @@ func (x *ServerConfig) GetUserAccounts() []*UserAccount {
 type ClientConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Sever is a list of Socks server addresses.
-	Server        *protocol.ServerEndpoint `protobuf:"bytes,1,opt,name=server,proto3" json:"server,omitempty"`
+	Server *protocol.ServerEndpoint `protobuf:"bytes,1,opt,name=server,proto3" json:"server,omitempty"`
+	// The handshake is pipelined by default with automatic fallback (fork; see
+	// pipeline.go). no_pipeline turns it off for this outbound.
+	NoPipeline    bool `protobuf:"varint,2,opt,name=no_pipeline,json=noPipeline,proto3" json:"no_pipeline,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -318,6 +321,13 @@ func (x *ClientConfig) GetServer() *protocol.ServerEndpoint {
 	return nil
 }
 
+func (x *ClientConfig) GetNoPipeline() bool {
+	if x != nil {
+		return x.NoPipeline
+	}
+	return false
+}
+
 var File_proxy_socks_config_proto protoreflect.FileDescriptor
 
 const file_proxy_socks_config_proto_rawDesc = "" +
@@ -342,9 +352,11 @@ const file_proxy_socks_config_proto_rawDesc = "" +
 	"\ruser_accounts\x18\a \x03(\v2\x1d.xray.proxy.socks.UserAccountR\fuserAccounts\x1a;\n" +
 	"\rAccountsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"L\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"m\n" +
 	"\fClientConfig\x12<\n" +
-	"\x06server\x18\x01 \x01(\v2$.xray.common.protocol.ServerEndpointR\x06server*%\n" +
+	"\x06server\x18\x01 \x01(\v2$.xray.common.protocol.ServerEndpointR\x06server\x12\x1f\n" +
+	"\vno_pipeline\x18\x02 \x01(\bR\n" +
+	"noPipeline*%\n" +
 	"\bAuthType\x12\v\n" +
 	"\aNO_AUTH\x10\x00\x12\f\n" +
 	"\bPASSWORD\x10\x01BR\n" +

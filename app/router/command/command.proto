@@ -8,6 +8,7 @@ option java_multiple_files = true;
 
 import "common/net/network.proto";
 import "common/serial/typed_message.proto";
+import "app/router/config.proto";
 
 // RoutingContext is the context with information relative to routing process.
 // It conforms to the structure of xray.features.routing.Context and
@@ -158,6 +159,14 @@ message ListRuleFullResponse {
   repeated FullRuleItem rules = 1;
 }
 
+// PutBalancers adds balancers or replaces the ones with the same tag; rules
+// pointing at a replaced balancer switch to the new one in the same snapshot.
+message PutBalancersRequest { repeated xray.app.router.BalancingRule balancers = 1; }
+message PutBalancersResponse {}
+// RemoveBalancers is idempotent and refuses balancers still used by a rule.
+message RemoveBalancersRequest { repeated string tags = 1; }
+message RemoveBalancersResponse {}
+
 service RoutingService {
   rpc SubscribeRoutingStats(SubscribeRoutingStatsRequest)
       returns (stream RoutingContext) {}
@@ -174,6 +183,9 @@ service RoutingService {
 
   rpc ListRule(ListRuleRequest) returns (ListRuleResponse) {}
   rpc ListRuleFull(ListRuleFullRequest) returns (ListRuleFullResponse) {}
+
+  rpc PutBalancers(PutBalancersRequest) returns (PutBalancersResponse) {}
+  rpc RemoveBalancers(RemoveBalancersRequest) returns (RemoveBalancersResponse) {}
 }
 
 message Config {}

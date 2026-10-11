@@ -490,7 +490,17 @@ func ClientHandshake(request *protocol.RequestHeader, reader io.Reader, writer i
 	}
 
 	b.Clear()
+	if err := writeClientRequest(b, request); err != nil {
+		return nil, err
+	}
+	if err := buf.WriteAllBytes(writer, b.Bytes(), nil); err != nil {
+		return nil, err
+	}
+	return readServerReply(request, reader)
+}
 
+// writeClientRequest appends the CONNECT / UDP ASSOCIATE request to b.
+func writeClientRequest(b *buf.Buffer, request *protocol.RequestHeader) error {
 	command := byte(cmdTCPConnect)
 	if request.Command == protocol.RequestCommandUDP {
 		command = byte(cmdUDPAssociate)
@@ -498,17 +508,15 @@ func ClientHandshake(request *protocol.RequestHeader, reader io.Reader, writer i
 	common.Must2(b.Write([]byte{socks5Version, command, 0x00 /* reserved */}))
 	if request.Command == protocol.RequestCommandUDP {
 		common.Must2(b.Write([]byte{1, 0, 0, 0, 0, 0, 0 /* RFC 1928 */}))
-	} else {
-		if err := addrParser.WriteAddressPort(b, request.Address, request.Port); err != nil {
-			return nil, err
-		}
+		return nil
 	}
+	return addrParser.WriteAddressPort(b, request.Address, request.Port)
+}
 
-	if err := buf.WriteAllBytes(writer, b.Bytes(), nil); err != nil {
-		return nil, err
-	}
-
-	b.Clear()
+// readServerReply reads the reply to the request; for UDP it returns where to send datagrams.
+func readServerReply(request *protocol.RequestHeader, reader io.Reader) (*protocol.RequestHeader, error) {
+	b := buf.New()
+	defer b.Release()
 	if _, err := b.ReadFullFrom(reader, 3); err != nil {
 		return nil, err
 	}
