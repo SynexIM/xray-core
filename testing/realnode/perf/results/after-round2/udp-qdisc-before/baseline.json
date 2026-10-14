@@ -1,0 +1,138 @@
+{
+  "time": "2026-10-14T16:31:20Z",
+  "platform": "linux/arm64",
+  "go": "go1.27.1",
+  "cpus": 8,
+  "revision": "516ce456dd12bf19d98ca0e9c32258a211236a0e-udp",
+  "measurements": [
+    {
+      "name": "burst_perf-node_MemErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_perf-target_InErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_perf-target_InCsumErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_perf-client_MemErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_perf-node_InErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_perf-node_InCsumErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_perf-target_RcvbufErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_perf-target_SndbufErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_perf-node_RcvbufErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_perf-node_SndbufErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_perf-client_InErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_perf-client_RcvbufErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_perf-client_SndbufErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_perf-target_MemErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_perf-client_InCsumErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_drop_pipe",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_drop_hub",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_drop_dispatcher",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_drop_wireguard",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_drop_hysteria",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_burst_200_sent",
+      "unit": "packets",
+      "value": 200
+    },
+    {
+      "name": "udp_burst_200_lost",
+      "unit": "packets",
+      "value": 101,
+      "note": "首批缺失序号 [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19]"
+    },
+    {
+      "name": "udp_burst_200_send_duration",
+      "unit": "ms",
+      "value": 9.95356
+    },
+    {
+      "name": "udp_burst_200_jitter",
+      "unit": "ms",
+      "p50": 0.0495,
+      "p99": 3.790514,
+      "max": 3.790514,
+      "samples": 98
+    },
+    {
+      "name": "hong_kong_node",
+      "unit": "",
+      "error": "生产节点未授权变更；本轮只运行隔离容器"
+    }
+  ]
+}

@@ -180,6 +180,16 @@ func (p *MetricsHandler) stats() map[string]map[string]map[string]int64 {
 	}
 	p.statsManager.VisitCounters(func(name string, counter feature_stats.Counter) bool {
 		nameSplit := strings.Split(name, ">>>")
+		if len(nameSplit) == 3 && nameSplit[0] == "dataplane" {
+			if resp["dataplane"] == nil {
+				resp["dataplane"] = map[string]map[string]int64{}
+			}
+			if resp["dataplane"][nameSplit[1]] == nil {
+				resp["dataplane"][nameSplit[1]] = map[string]int64{}
+			}
+			resp["dataplane"][nameSplit[1]][nameSplit[2]] = counter.Value()
+			return true
+		}
 		if len(nameSplit) < 4 {
 			return true
 		}

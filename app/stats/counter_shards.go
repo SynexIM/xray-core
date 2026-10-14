@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"github.com/xtls/xray-core/common/dataplane"
 	"github.com/xtls/xray-core/common/errors"
 	featurestats "github.com/xtls/xray-core/features/stats"
 	"sync"
@@ -22,6 +23,12 @@ func statisticsShard(name string) uint32 {
 	return hash % statisticsShards
 }
 func (manager *Manager) counter(name string, create, exclusive bool) (featurestats.Counter, error) {
+	if counter := dataplane.Counter(name); counter != nil {
+		if exclusive {
+			return nil, errors.New("Counter ", name, " already registered.")
+		}
+		return counter, nil
+	}
 	if email, kind, ok := parseUserCounter(name); ok {
 		return manager.userCounter(email, kind, create, exclusive)
 	}
@@ -61,6 +68,9 @@ func (manager *Manager) GetCounter(name string) featurestats.Counter {
 	return value
 }
 func (manager *Manager) UnregisterCounter(name string) error {
+	if dataplane.Counter(name) != nil {
+		return errors.New("process dataplane counter cannot be unregistered: ", name)
+	}
 	if email, kind, ok := parseUserCounter(name); ok {
 		manager.removeUserCounter(email, kind)
 		return nil
@@ -72,6 +82,9 @@ func (manager *Manager) UnregisterCounter(name string) error {
 	return nil
 }
 func (manager *Manager) VisitCounters(visitor func(string, featurestats.Counter) bool) {
+	if !dataplane.VisitCounters(visitor) {
+		return
+	}
 	for index := range manager.counterShards {
 		shard := &manager.counterShards[index]
 		shard.RLock()

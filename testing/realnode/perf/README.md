@@ -19,6 +19,6 @@ docker run --rm --privileged --network none -e XRAY_PERF_REVISION="$(git rev-par
 
 两侧采样：编译 `./testing/realnode/perf/profiled` 为 `.perf-profiled-linux`，运行 `-mode network -source connections -xray /work/.perf-profiled-linux -profiles <目录>`。它加载正式 Xray 的同一组模块，仅基准进程开启 mutex/block 采样；客户端和节点各生成 CPU/mutex/block 三个 profile。`go tool pprof -top` 与 `-http=127.0.0.1:8080` 可查看要点和火焰图。采样吞吐与无采样最终基线分开记录。
 
-小包 64B、每次往返后等 20ms；满载与未限速分别运行。UDP 恒定码率为 1200B × 625 包/秒 × 60 秒，突发为 10ms 内 200 包，检查序号和到达间隔。仅报告端到端丢包；第 2 轮的分层丢包计数尚未实现。重传率取真实节点客户侧 TCP socket 的 `ss -tin` 字节重传/发送增量，热身 2 秒后测 60 秒。
+小包 64B、每次往返后等 20ms；满载与未限速分别运行。UDP 先确认整条会话可回显（排除冷邻居未解析队列），恒定码率为 1200B × 625 包/秒 × 60 秒，突发为 250Mbps 档内 10ms 发 200 包（自身约 192Mbps），发送末段用 Gosched 等待绝对时刻，报告实际发送时长。保留五层丢包、三端内核 UDP 错误、缺失序号与 qdisc 日志。`-source overspeed` 在 2Mbps 原生 UDP 入站发 600 包，验证 pipe 丢包和内核接收溢出均可观测。内核 UDP 错误由基准读 `/proc/net/snmp`，不冒充五层计数；agent 仍需采集节点内核错误。重传率取真实节点客户侧 TCP socket 的 `ss -tin` 字节重传/发送增量，热身 2 秒后测 60 秒。
 
 `-mode` 可单独运行 auth/memory/route/runtime/page/network；逐场景原始 JSON 保留在结果目录，`-mode combine -output <目录>` 从原始数据重新生成汇总，不重新压测。未测成的场景带真实 error；香港节点需要生产测试授权，本轮不连接。三项真实专线场景按施工单暂缓。

@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -226,7 +227,7 @@ func udpAssociation() (net.Conn, *net.UDPConn, *net.UDPAddr, error) {
 	return control, udp, address, nil
 }
 
-func udpSamples(seconds int, burst bool) ([]measurement, error) {
+func udpSamples(seconds int, burst, overspeed bool) ([]measurement, error) {
 	control, connection, address, err := udpAssociation()
 	if err != nil {
 		return nil, err
@@ -241,8 +242,33 @@ func udpSamples(seconds int, burst bool) ([]measurement, error) {
 		interval = 50 * time.Microsecond
 		name = "udp_burst_200"
 	}
+	if overspeed {
+		count = 600
+		interval = 15 * time.Microsecond
+		name = "udp_overspeed_600"
+		address.Port = 19003
+	}
 	packet := make([]byte, 1210)
 	copy(packet, []byte{0, 0, 0, 1, 10, 202, 2, 2, 74, 57})
+	// 冷 ARP 的 unresolved 邻居队列不属于 Xray 队列；确认整条会话可回显后测突发。
+	binary.BigEndian.PutUint32(packet[10:14], ^uint32(0))
+	if err := connection.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return nil, err
+	}
+	if _, err := connection.WriteToUDP(packet, address); err != nil {
+		return nil, err
+	}
+	warmup := make([]byte, 65535)
+	length, _, err := connection.ReadFromUDP(warmup)
+	if err != nil {
+		return nil, fmt.Errorf("UDP 会话热身: %w", err)
+	}
+	if length < 14 || binary.BigEndian.Uint32(warmup[10:14]) != ^uint32(0) {
+		return nil, fmt.Errorf("UDP 热身回复不匹配")
+	}
+	if err := connection.SetReadDeadline(time.Time{}); err != nil {
+		return nil, err
+	}
 	var wait sync.WaitGroup
 	var arrivals []time.Time
 	seen := make(map[uint32]bool)
@@ -273,8 +299,11 @@ func udpSamples(seconds int, burst bool) ([]measurement, error) {
 	start := time.Now()
 	for sequence := 0; sequence < count; sequence++ {
 		deadline := start.Add(time.Duration(sequence) * interval)
-		if remaining := time.Until(deadline); remaining > 0 {
-			time.Sleep(remaining)
+		if remaining := time.Until(deadline); remaining > 250*time.Microsecond {
+			time.Sleep(remaining - 250*time.Microsecond)
+		}
+		for time.Now().Before(deadline) {
+			runtime.Gosched()
 		}
 		binary.BigEndian.PutUint32(packet[10:14], uint32(sequence))
 		if _, err := connection.WriteToUDP(packet, address); err != nil {
@@ -290,10 +319,18 @@ func udpSamples(seconds int, burst bool) ([]measurement, error) {
 		return nil, receiveError
 	}
 	var jitter []float64
+	var missing []int
+	for sequence := 0; sequence < count && len(missing) < 20; sequence++ {
+		if !seen[uint32(sequence)] {
+			missing = append(missing, sequence)
+		}
+	}
 	for index := 1; index < len(arrivals); index++ {
 		jitter = append(jitter, math.Abs(float64(arrivals[index].Sub(arrivals[index-1])-interval))/1e6)
 	}
-	return []measurement{scalar(name+"_sent", "packets", float64(count)), scalar(name+"_lost", "packets", float64(count-len(seen))), scalar(name+"_send_duration", "ms", float64(elapsed.Nanoseconds())/1e6), distribution(name+"_jitter", "ms", jitter)}, nil
+	lost := scalar(name+"_lost", "packets", float64(count-len(seen)))
+	lost.Note = fmt.Sprintf("首批缺失序号 %v", missing)
+	return []measurement{scalar(name+"_sent", "packets", float64(count)), lost, scalar(name+"_send_duration", "ms", float64(elapsed.Nanoseconds())/1e6), distribution(name+"_jitter", "ms", jitter)}, nil
 }
 
 func clientBenchmark(options options) ([]measurement, error) {
@@ -326,9 +363,11 @@ func clientBenchmark(options options) ([]measurement, error) {
 		rate := float64(bytes()-before) * 8 / time.Since(start).Seconds() / 1e6
 		return []measurement{distribution("web_300_downloads_20mbps", "ms", values), scalar("download_300_aggregate", "Mbps", rate)}, err
 	case "udp":
-		return udpSamples(options.seconds, false)
+		return udpSamples(options.seconds, false, false)
 	case "burst":
-		return udpSamples(options.seconds, true)
+		return udpSamples(options.seconds, true, false)
+	case "overspeed":
+		return udpSamples(options.seconds, true, true)
 	case "connections":
 		return connectionBenchmark(options)
 	case "iperf":
@@ -583,7 +622,9 @@ func networkBenchmark(options options) ([]measurement, error) {
 		case "udp":
 			rate = 10000000
 		case "burst":
-			rate = 100000000
+			rate = 250000000
+		case "overspeed":
+			rate = 2000000
 		case "loaded_web", "web":
 			rate = 20000000
 		case "shallow":
@@ -601,15 +642,16 @@ func networkBenchmark(options options) ([]measurement, error) {
 				profile["up"] = []map[string]any{{"rate": fmt.Sprintf("%dbps", rate)}}
 				profile["down"] = []map[string]any{{"rate": fmt.Sprintf("%dbps", rate)}}
 			}
-			config["limit"] = map[string]any{"profiles": map[string]any{"p": profile}, "rules": []map[string]any{{"ruleTag": "shared", "inboundTag": []string{"entry", "vless-entry"}, "profile": "p"}}}
+			config["limit"] = map[string]any{"profiles": map[string]any{"p": profile}, "rules": []map[string]any{{"ruleTag": "shared", "inboundTag": []string{"entry", "vless-entry", "udp-direct"}, "profile": "p"}}}
+		}
+		if scenario == "overspeed" {
+			config["inbounds"] = append(config["inbounds"].([]map[string]any), map[string]any{"tag": "udp-direct", "listen": "10.202.1.2", "port": 19003, "protocol": "dokodemo-door", "settings": map[string]any{"address": "10.202.2.2", "port": 19001, "network": "udp"}})
 		}
 		if scenario == "connections" {
 			config["inbounds"] = append(config["inbounds"].([]map[string]any), map[string]any{"tag": "vless-entry", "listen": "10.202.1.2", "port": 19002, "protocol": "vless", "settings": map[string]any{"decryption": "none", "clients": accounts}})
 		}
 		fmt.Fprintln(os.Stderr, "网络场景", scenario)
-		if options.profiles != "" {
-			config["metrics"] = map[string]any{"listen": "127.0.0.1:19090"}
-		}
+		config["metrics"] = map[string]any{"listen": "127.0.0.1:19090"}
 		start := time.Now()
 		inbounds := config["inbounds"].([]map[string]any)
 		inbounds[0]["listen"] = "0.0.0.0"
@@ -626,6 +668,14 @@ func networkBenchmark(options options) ([]measurement, error) {
 			return nil, err
 		}
 		measureStart := time.Now()
+		var kernelBefore map[string]uint64
+		if scenario == "udp" || scenario == "burst" || scenario == "overspeed" {
+			kernelBefore, err = udpKernelCounters()
+			if err != nil {
+				node.Stop()
+				return nil, err
+			}
+		}
 		command := exec.CommandContext(ctx, "ip", "netns", "exec", "perf-client", os.Args[0], "-mode", "client", "-source", scenario, "-seconds", strconv.Itoa(options.seconds))
 		command.Args = append(command.Args, "-concurrency", strconv.Itoa(options.concurrency))
 		var collector *exec.Cmd
@@ -641,6 +691,38 @@ func networkBenchmark(options options) ([]measurement, error) {
 		command.Stderr = os.Stderr
 		output, clientError := command.Output()
 		after, cpuError := cpuSeconds(node.Command.Process.Pid)
+		if scenario == "udp" || scenario == "burst" || scenario == "overspeed" {
+			for _, pair := range [][2]string{{"perf-client", "perf-cn"}, {"perf-node", "perf-nc"}, {"perf-node", "perf-nt"}, {"perf-target", "perf-tn"}, {"perf-bottleneck", "perf-bn"}, {"perf-bottleneck", "perf-bc"}} {
+				data, err := exec.Command("ip", "netns", "exec", pair[0], "tc", "-s", "qdisc", "show", "dev", pair[1]).CombinedOutput()
+				if err != nil {
+					node.Stop()
+					return nil, fmt.Errorf("UDP qdisc: %w: %s", err, data)
+				}
+				fmt.Fprintf(os.Stderr, "%s %s: %s", pair[0], pair[1], data)
+			}
+			kernelAfter, err := udpKernelCounters()
+			if err != nil {
+				node.Stop()
+				return nil, err
+			}
+			for name, value := range kernelAfter {
+				if strings.HasSuffix(name, "Errors") {
+					rows = append(rows, scalar(scenario+"_"+name, "packets", float64(value-kernelBefore[name])))
+				}
+			}
+			telemetry := exec.CommandContext(ctx, "ip", "netns", "exec", "perf-node", os.Args[0], "-mode", "udp-counters", "-source", scenario)
+			data, err := telemetry.Output()
+			if err != nil {
+				node.Stop()
+				return nil, fmt.Errorf("UDP 分层计数: %w", err)
+			}
+			var counters []measurement
+			if err := json.Unmarshal(data, &counters); err != nil {
+				node.Stop()
+				return nil, err
+			}
+			rows = append(rows, counters...)
+		}
 		if collector != nil {
 			if err := collector.Wait(); err != nil {
 				node.Stop()

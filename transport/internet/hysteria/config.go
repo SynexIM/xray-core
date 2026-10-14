@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/xtls/xray-core/common"
+	"github.com/xtls/xray-core/common/dataplane"
 	"github.com/xtls/xray-core/proxy/hysteria/account"
 	"github.com/xtls/xray-core/transport/internet"
 )
@@ -22,7 +23,7 @@ const (
 	StatusAuthOK              = 233
 	FrameTypeTCPRequest       = 0x401
 	MaxDatagramFrameSize      = 1200
-	udpMessageChanSize        = 1024
+	udpMessageChanSize        = dataplane.UDPHysteriaPackets
 	idleCleanupInterval       = 1 * time.Second
 )
 

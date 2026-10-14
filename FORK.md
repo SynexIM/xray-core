@@ -4,6 +4,10 @@
 
 建连基准新增两侧 CPU/mutex/block profile（基准专用 profiled 入口加载正式二进制相同模块，不改变正式进程的采样设置）。节点 CPU 94.23% 的样本落在系统调用，91.58% 累计在出口 `syscall.Connect`；客户端仅 0.12 核。原台只分散客户端来源，节点出口仍对同一目标 IP:端口建连。现在目标也分散到 64 个地址，避免出口 TIME_WAIT 四元组耗尽。原 60 秒 424.873/s、22213 EOF、93.40% CPU；同一份节点代码在修正台上 60 秒 10893.644/s、0 失败、51.08% CPU（含锁/阻塞采样）。吞吐仍未达 2 万/s。原始 profile 与前后报告见 `testing/realnode/perf/results/after-round2/`；数字变化是基准台修正，不能计作数据面优化。
 
+UDP 五处满队列计数统一为 `dataplane>>>udp_drop>>>{pipe,hub,dispatcher,wireguard,hysteria}`，通过现有 StatsService.GetStats/QueryStats 和 metrics debug/vars 导出。计数为进程生命周期累计值，包含该进程所有 Xray 实例；只能重置，不能注销。默认队列为 pipe 256KiB、hub 1024 包、dispatcher 256 包、WG/Hy2 各 1024 包；释放 dispatcher 接收的 Buffer，防止长期 UDP 读泄漏。pipe 写错误保留日志原因。五层强制溢出与 RPC 出口均有受影响包测试。
+
+突发台改为先确认一次端到端 UDP 回显，再发 200×1200B/10ms，档位 250Mbps（该突发本身约 192Mbps，旧 100Mbps 档不能称“限速以内”）。改前 48 丢包/12.795ms；校正后 0 丢包/9.959ms。冷会话仍实测丢 101 包，五层、内核 UDP 错误、qdisc 丢包均为 0，缺失的是最前一批包；热身后归零，符合冷 ARP 未解析邻居队列溢出的特征，尚未用邻居 discard 计数确认，不能归因给 UDP 预借。2Mbps 原生 UDP 入站人为超速 600 包，丢 295＝pipe 219＋内核 RcvbufErrors 76。6Mbps/60 秒 37500 包全到，抖动 p99 9.420ms，仍未达 3ms。详细结果保留在 after-round2 的 udp-* 子目录。
+
 基线：**XTLS/Xray-core v26.10.10**。本分支 `synexim/v26.10.10` 由 `752042bc` 将旧 fork 差异三方移植到该 tag。module 保持 `github.com/xtls/xray-core`，调用方通过 `replace` 使用。发布使用 SynexIM 自有通道，保留上游 MPL-2.0 与版权声明；发布约束见 [RELEASE.md](RELEASE.md)。
 
 fork 改动集中在通用限速和运行时管理。本文记录当前差异；旧实现可在 Git 历史中查看，不保留并行兼容路径。

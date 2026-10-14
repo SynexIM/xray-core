@@ -1,0 +1,62 @@
+{
+  "time": "2026-10-14T16:26:48Z",
+  "platform": "linux/arm64",
+  "go": "go1.27.1",
+  "cpus": 8,
+  "revision": "516ce456dd12bf19d98ca0e9c32258a211236a0e-udp",
+  "measurements": [
+    {
+      "name": "burst_drop_pipe",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_drop_hub",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_drop_dispatcher",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_drop_wireguard",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "burst_drop_hysteria",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_burst_200_sent",
+      "unit": "packets",
+      "value": 200
+    },
+    {
+      "name": "udp_burst_200_lost",
+      "unit": "packets",
+      "value": 101
+    },
+    {
+      "name": "udp_burst_200_send_duration",
+      "unit": "ms",
+      "value": 9.954232
+    },
+    {
+      "name": "udp_burst_200_jitter",
+      "unit": "ms",
+      "p50": 0.040125,
+      "p99": 1.671998,
+      "max": 1.671998,
+      "samples": 98
+    },
+    {
+      "name": "hong_kong_node",
+      "unit": "",
+      "error": "生产节点未授权变更；本轮只运行隔离容器"
+    }
+  ]
+}

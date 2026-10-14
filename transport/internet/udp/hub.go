@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/xtls/xray-core/common/buf"
+	"github.com/xtls/xray-core/common/dataplane"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/protocol/udp"
@@ -34,7 +35,7 @@ type Hub struct {
 
 func ListenUDP(ctx context.Context, address net.Address, port net.Port, streamSettings *internet.MemoryStreamConfig, options ...HubOption) (*Hub, error) {
 	hub := &Hub{
-		capacity:     256,
+		capacity:     dataplane.UDPHubPackets,
 		recvOrigDest: false,
 	}
 	for _, opt := range options {
@@ -140,6 +141,7 @@ func (h *Hub) start() {
 		select {
 		case c <- payload:
 		default:
+			dataplane.DropUDP(dataplane.UDPHub, 1)
 			buffer.Release()
 			payload.Payload = nil
 		}

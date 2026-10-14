@@ -146,7 +146,12 @@ func memoryBenchmark(count int) ([]measurement, error) {
 		return nil, err
 	}
 	counters := 0
-	manager.VisitCounters(func(_ string, _ featurestats.Counter) bool { counters++; return true })
+	manager.VisitCounters(func(name string, _ featurestats.Counter) bool {
+		if strings.HasPrefix(name, "user>>>") {
+			counters++
+		}
+		return true
+	})
 	runtime.KeepAlive(validator)
 	label := strconv.Itoa(count)
 	return []measurement{scalar("heap_per_identity_"+label, "B", float64(heapLoaded-heapBefore)/float64(count)), scalar("rss_per_identity_"+label, "B", float64(rssLoaded-rssBefore)/float64(count)), scalar("heap_after_delete_"+label, "B", float64(heapDeleted)), scalar("rss_after_delete_"+label, "B", float64(rssDeleted)), scalar("counters_after_delete_"+label, "count", float64(counters))}, nil

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,37 @@ import (
 	"runtime/pprof"
 	"time"
 )
+
+func collectUDPCounters(scenario string) ([]measurement, error) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	response, err := client.Get("http://127.0.0.1:19090/debug/vars")
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("UDP 计数 HTTP %d", response.StatusCode)
+	}
+	var result struct {
+		Stats map[string]map[string]map[string]int64 `json:"stats"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	counters, found := result.Stats["dataplane"]["udp_drop"]
+	if !found {
+		return nil, fmt.Errorf("节点没有 UDP 计数器族")
+	}
+	var rows []measurement
+	for _, layer := range []string{"pipe", "hub", "dispatcher", "wireguard", "hysteria"} {
+		value, found := counters[layer]
+		if !found {
+			return nil, fmt.Errorf("节点没有 %s UDP 计数器", layer)
+		}
+		rows = append(rows, scalar(scenario+"_drop_"+layer, "packets", float64(value)))
+	}
+	return rows, nil
+}
 
 func startClientProfiles(directory string) (func() error, error) {
 	if directory == "" {

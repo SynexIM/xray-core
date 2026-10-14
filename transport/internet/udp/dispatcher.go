@@ -9,6 +9,7 @@ import (
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
+	"github.com/xtls/xray-core/common/dataplane"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/protocol/udp"
@@ -171,7 +172,7 @@ type dispatcherConn struct {
 
 func DialDispatcher(ctx context.Context, dispatcher routing.Dispatcher) (net.PacketConn, error) {
 	c := &dispatcherConn{
-		cache: make(chan *udp.Packet, 16),
+		cache: make(chan *udp.Packet, dataplane.UDPDispatcherPackets),
 		done:  done.New(),
 		ctx:   ctx,
 	}
@@ -192,6 +193,7 @@ func (c *dispatcherConn) callback(ctx context.Context, packet *udp.Packet) {
 		return
 	case c.cache <- packet:
 	default:
+		dataplane.DropUDP(dataplane.UDPDispatcher, 1)
 		packet.Payload.Release()
 		return
 	}
@@ -210,6 +212,7 @@ s:
 		}
 	case packet = <-c.cache:
 	}
+	defer packet.Payload.Release()
 	return copy(p, packet.Payload.Bytes()), &net.UDPAddr{
 		IP:   packet.Source.Address.IP(),
 		Port: int(packet.Source.Port),

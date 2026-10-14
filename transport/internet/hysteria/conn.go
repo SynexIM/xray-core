@@ -9,6 +9,7 @@ import (
 
 	"github.com/apernet/quic-go"
 	"github.com/apernet/quic-go/quicvarint"
+	"github.com/xtls/xray-core/common/dataplane"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/protocol"
@@ -254,6 +255,7 @@ func (m *udpSessionManager) feed(id uint32, d []byte) {
 		select {
 		case udpConn.ch <- d:
 		default:
+			dataplane.DropUDP(dataplane.UDPHysteria, 1)
 		}
 		m.RUnlock()
 		return
@@ -291,5 +293,6 @@ func (m *udpSessionManager) feed(id uint32, d []byte) {
 	select {
 	case udpConn.ch <- d:
 	default:
+		dataplane.DropUDP(dataplane.UDPHysteria, 1)
 	}
 }

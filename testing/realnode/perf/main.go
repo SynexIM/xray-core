@@ -122,6 +122,8 @@ func run(options options) ([]measurement, error) {
 		return clientBenchmark(options)
 	case "profile":
 		return nil, collectNodeProfiles(options)
+	case "udp-counters":
+		return collectUDPCounters(options.source)
 	case "target":
 		return nil, serveTarget()
 	case "all":

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/xtls/xray-core/common/buf"
+	"github.com/xtls/xray-core/common/dataplane"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
 	"gvisor.dev/gvisor/pkg/buffer"
@@ -113,6 +114,7 @@ func (m *udpManager) feed(src net.Destination, dst net.Destination, data []byte)
 	uc, ok := m.m[src.NetAddr()]
 	if ok {
 		if !uc.queue.push(&packet{p: data, dest: &dst}) {
+			dataplane.DropUDP(dataplane.UDPWireGuard, 1)
 			errors.LogDebug(context.Background(), "drop udp with size ", len(data), " to ", dst.NetAddr(), " original ", uc.dst.NetAddr(), " > queue full")
 		}
 		m.mutex.RUnlock()
@@ -141,6 +143,7 @@ func (m *udpManager) feed(src net.Destination, dst net.Destination, data []byte)
 	}
 
 	if !uc.queue.push(&packet{p: data, dest: &dst}) {
+		dataplane.DropUDP(dataplane.UDPWireGuard, 1)
 		errors.LogDebug(context.Background(), "drop udp with size ", len(data), " to ", dst.NetAddr(), " original ", uc.dst.NetAddr(), " > queue full 2")
 	}
 }
@@ -316,7 +319,7 @@ func (c *udpConn) SetWriteDeadline(t time.Time) error {
 }
 
 // udpQueueLimit bounds the packets waiting for one UDP flow; more are dropped.
-const udpQueueLimit = 1024
+const udpQueueLimit = dataplane.UDPWireGuardPackets
 
 // packetQueue holds the packets waiting for one UDP flow. Unlike a buffered
 // channel of the same bound it only allocates for packets actually queued, so

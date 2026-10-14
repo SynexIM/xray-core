@@ -9,6 +9,7 @@ import (
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 	c "github.com/xtls/xray-core/common/ctx"
+	"github.com/xtls/xray-core/common/dataplane"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/serial"
@@ -298,7 +299,7 @@ func (w *udpWorker) getConnection(id connID) (*udpConn, bool) {
 		return nil, false
 	}
 
-	pReader, pWriter := pipe.New(pipe.DiscardOverflow(), pipe.WithSizeLimit(16*1024))
+	pReader, pWriter := pipe.New(pipe.DiscardOverflow(), pipe.WithSizeLimit(dataplane.UDPPipeBytes), pipe.OnOverflow(func(packets int64) { dataplane.DropUDP(dataplane.UDPPipe, packets) }))
 	conn := &udpConn{
 		reader: pReader,
 		writer: pWriter,
@@ -340,7 +341,9 @@ func (w *udpWorker) callback(b *buf.Buffer, source net.Destination, originalDest
 	}
 
 	// payload will be discarded in pipe is full.
-	conn.writer.WriteMultiBuffer(buf.MultiBuffer{b})
+	if err := conn.writer.WriteMultiBuffer(buf.MultiBuffer{b}); err != nil {
+		errors.LogInfoInner(w.ctx, err, "failed to queue UDP payload")
+	}
 
 	if !existing {
 		common.Must(w.checker.Start())
@@ -429,7 +432,7 @@ func (w *udpWorker) clean() error {
 func (w *udpWorker) Start() error {
 	w.activeConn = make(map[connID]*udpConn, 16)
 	ctx := context.Background()
-	h, err := udp.ListenUDP(ctx, w.address, w.port, w.stream, udp.HubCapacity(256))
+	h, err := udp.ListenUDP(ctx, w.address, w.port, w.stream)
 	if err != nil {
 		return err
 	}

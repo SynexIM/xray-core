@@ -1,0 +1,138 @@
+{
+  "time": "2026-10-14T16:35:18Z",
+  "platform": "linux/arm64",
+  "go": "go1.27.1",
+  "cpus": 8,
+  "revision": "516ce456dd12bf19d98ca0e9c32258a211236a0e-udp",
+  "measurements": [
+    {
+      "name": "udp_perf-client_RcvbufErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_perf-node_InCsumErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_perf-target_RcvbufErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_perf-target_SndbufErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_perf-target_InCsumErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_perf-node_InErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_perf-node_RcvbufErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_perf-node_SndbufErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_perf-node_MemErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_perf-target_MemErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_perf-client_InCsumErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_perf-client_MemErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_perf-client_InErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_perf-client_SndbufErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_perf-target_InErrors",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_drop_pipe",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_drop_hub",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_drop_dispatcher",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_drop_wireguard",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_drop_hysteria",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_constant_6mbps_sent",
+      "unit": "packets",
+      "value": 37500
+    },
+    {
+      "name": "udp_constant_6mbps_lost",
+      "unit": "packets",
+      "value": 0,
+      "note": "首批缺失序号 []"
+    },
+    {
+      "name": "udp_constant_6mbps_send_duration",
+      "unit": "ms",
+      "value": 59998.741552
+    },
+    {
+      "name": "udp_constant_6mbps_jitter",
+      "unit": "ms",
+      "p50": 1.598333,
+      "p99": 9.420121,
+      "max": 31.109715,
+      "samples": 37499
+    },
+    {
+      "name": "hong_kong_node",
+      "unit": "",
+      "error": "生产节点未授权变更；本轮只运行隔离容器"
+    }
+  ]
+}
