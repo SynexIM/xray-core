@@ -1,9 +1,7 @@
 package protocol
 
 import (
-	"runtime"
 	"sync"
-	"weak"
 )
 
 type userSessions struct {
@@ -11,24 +9,22 @@ type userSessions struct {
 	revoked bool
 }
 
-var identities sync.Map
 var emailSessions = struct {
 	sync.Mutex
 	next    uint64
 	entries map[string]map[uint64]func()
 }{entries: map[string]map[uint64]func(){}}
 
-// 弱身份键用于拦住删除与认证的竞态，不把已删除的用户留在进程里。
+// 会话状态由身份拥有，避免每个已认证身份进入全局弱表和 GC cleanup 链。
 func (u *MemoryUser) sessions() *userSessions {
-	key := weak.Make(u)
-	if value, ok := identities.Load(key); ok {
-		return value.(*userSessions)
+	if state := u.runtimeSessions.Load(); state != nil {
+		return state
 	}
-	actual, loaded := identities.LoadOrStore(key, &userSessions{})
-	if !loaded {
-		runtime.AddCleanup(u, func(k weak.Pointer[MemoryUser]) { identities.Delete(k) }, key)
+	state := new(userSessions)
+	if u.runtimeSessions.CompareAndSwap(nil, state) {
+		return state
 	}
-	return actual.(*userSessions)
+	return u.runtimeSessions.Load()
 }
 func (u *MemoryUser) TrackRuntimeSession(stop func()) (func(), bool) {
 	if u == nil || u.Email == "" {
@@ -64,9 +60,7 @@ func (u *MemoryUser) TrackRuntimeSession(stop func()) (func(), bool) {
 func (u *MemoryUser) ShareRuntimeSessions(previous *MemoryUser) {
 	if u != nil && previous != nil && u != previous {
 		u.shareStats(previous)
-		key := weak.Make(u)
-		identities.Store(key, previous.sessions())
-		runtime.AddCleanup(u, func(k weak.Pointer[MemoryUser]) { identities.Delete(k) }, key)
+		u.runtimeSessions.Store(previous.sessions())
 	}
 }
 

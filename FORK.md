@@ -8,6 +8,8 @@ UDP 五处满队列计数统一为 `dataplane>>>udp_drop>>>{pipe,hub,dispatcher,
 
 突发台改为先确认一次端到端 UDP 回显，再发 200×1200B/10ms，档位 250Mbps（该突发本身约 192Mbps，旧 100Mbps 档不能称“限速以内”）。改前 48 丢包/12.795ms；校正后 0 丢包/9.959ms。冷会话仍实测丢 101 包，五层、内核 UDP 错误、qdisc 丢包均为 0，缺失的是最前一批包；热身后归零，符合冷 ARP 未解析邻居队列溢出的特征，尚未用邻居 discard 计数确认，不能归因给 UDP 预借。2Mbps 原生 UDP 入站人为超速 600 包，丢 295＝pipe 219＋内核 RcvbufErrors 76。6Mbps/60 秒 37500 包全到，抖动 p99 9.420ms，仍未达 3ms。详细结果保留在 after-round2 的 udp-* 子目录。
 
+修正台 profile 中身份弱引用与 GC cleanup 的 special 查找有明确开销。将撤销状态放到已有 MemoryUser 内，通过原子指针初始化，热改共享同一撤销状态；删除全局弱身份表与每身份 AddCleanup，不改变按 email 中断会话语义。同为 2048 并发、60 秒、两侧采样：10893.644→15175.910/s，失败均 0，CPU 51.08→53.80%（每成功连接节点 CPU 约 375→284µs）；吞吐仍未达 2 万/s。protocol/dispatcher/proxyman/VLESS 与 VMess 编解码 race 测试通过，序列化比较只比较公开身份，不比较运行态原子字段。
+
 基线：**XTLS/Xray-core v26.10.10**。本分支 `synexim/v26.10.10` 由 `752042bc` 将旧 fork 差异三方移植到该 tag。module 保持 `github.com/xtls/xray-core`，调用方通过 `replace` 使用。发布使用 SynexIM 自有通道，保留上游 MPL-2.0 与版权声明；发布约束见 [RELEASE.md](RELEASE.md)。
 
 fork 改动集中在通用限速和运行时管理。本文记录当前差异；旧实现可在 Git 历史中查看，不保留并行兼容路径。

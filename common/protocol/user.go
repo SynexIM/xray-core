@@ -60,8 +60,9 @@ func ToProtoUser(mu *MemoryUser) *User {
 
 // MemoryUser is a parsed form of User, to reduce number of parsing of Account proto.
 type MemoryUser struct {
-	runtimeStats atomic.Pointer[userStats]
-	Account      Account
-	Email        string
-	Level        uint32
+	runtimeStats    atomic.Pointer[userStats]
+	runtimeSessions atomic.Pointer[userSessions]
+	Account         Account
+	Email           string
+	Level           uint32
 }
