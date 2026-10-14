@@ -63,6 +63,7 @@ func (u *MemoryUser) TrackRuntimeSession(stop func()) (func(), bool) {
 }
 func (u *MemoryUser) ShareRuntimeSessions(previous *MemoryUser) {
 	if u != nil && previous != nil && u != previous {
+		u.shareStats(previous)
 		key := weak.Make(u)
 		identities.Store(key, previous.sessions())
 		runtime.AddCleanup(u, func(k weak.Pointer[MemoryUser]) { identities.Delete(k) }, key)
@@ -93,4 +94,5 @@ func (u *MemoryUser) RevokeRuntimeSessions() {
 	state.revoked = true
 	state.Unlock()
 	KillUserConnections([]string{u.Email})
+	u.ReleaseStats()
 }

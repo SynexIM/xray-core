@@ -9,6 +9,7 @@ import (
 	appstats "github.com/xtls/xray-core/app/stats"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/session"
+	"github.com/xtls/xray-core/features/policy"
 	featurestats "github.com/xtls/xray-core/features/stats"
 )
 
@@ -21,7 +22,7 @@ func TestActiveConnectionGaugesReleaseOnContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(session.ContextWithInbound(context.Background(), &session.Inbound{
 		Tag: "shared-inbound", User: user,
 	}))
-	if err := trackConnectionStats(ctx, manager); err != nil {
+	if err := trackConnectionStats(ctx, manager, policy.DefaultManager{}); err != nil {
 		t.Fatal(err)
 	}
 	userCounter := manager.GetCounter(featurestats.ActiveUserConnectionCounterName("client-uid"))
@@ -48,12 +49,12 @@ func (failingCounterManager) GetOrRegisterCounter(string) (featurestats.Counter,
 func TestGaugeRegistrationFailureReleasesConnectionSlot(t *testing.T) {
 	user := &protocol.MemoryUser{Email: "client-uid"}
 	failed := session.ContextWithInbound(context.Background(), &session.Inbound{User: user})
-	if err := trackConnectionStats(failed, failingCounterManager{}); err == nil {
+	if err := trackConnectionStats(failed, failingCounterManager{}, policy.DefaultManager{}); err == nil {
 		t.Fatal("expected gauge registration failure")
 	}
 	ctx, cancel := context.WithCancel(session.ContextWithInbound(context.Background(), &session.Inbound{User: user}))
 	defer cancel()
-	if err := trackConnectionStats(ctx, featurestats.NoopManager{}); err != nil {
+	if err := trackConnectionStats(ctx, featurestats.NoopManager{}, policy.DefaultManager{}); err != nil {
 		t.Fatalf("failed gauge registration leaked the connection slot: %v", err)
 	}
 }

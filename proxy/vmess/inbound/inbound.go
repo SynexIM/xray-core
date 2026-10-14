@@ -147,12 +147,15 @@ func (*Handler) Network() []net.Network {
 	return []net.Network{net.Network_TCP, net.Network_UNIX}
 }
 
-func (h *Handler) GetOrGenerateUser(email string) *protocol.MemoryUser {
+func (h *Handler) GetOrGenerateUser(email string) (*protocol.MemoryUser, error) {
 	user, existing := h.usersByEmail.GetOrGenerate(email)
 	if !existing {
-		h.clients.Add(user)
+		if err := h.clients.Add(user); err != nil {
+			h.usersByEmail.Remove(email)
+			return nil, err
+		}
 	}
-	return user
+	return user, nil
 }
 
 func (h *Handler) GetUser(ctx context.Context, email string) *protocol.MemoryUser {
@@ -171,7 +174,11 @@ func (h *Handler) AddUser(ctx context.Context, user *protocol.MemoryUser) error 
 	if len(user.Email) > 0 && !h.usersByEmail.Add(user) {
 		return errors.New("User ", user.Email, " already exists.")
 	}
-	return h.clients.Add(user)
+	if err := h.clients.Add(user); err != nil {
+		h.usersByEmail.Remove(user.Email)
+		return err
+	}
+	return nil
 }
 
 func (h *Handler) RemoveUser(ctx context.Context, email string) error {
@@ -238,7 +245,7 @@ func (h *Handler) Process(ctx context.Context, network net.Network, connection s
 
 	reader := &buf.BufferedReader{Reader: buf.NewReader(connection)}
 	svrSession := encoding.NewServerSession(h.clients, h.sessionHistory)
-	request, err := svrSession.DecodeRequestHeader(reader, isDrain)
+	request, err := decodeRequestHeader(ctx, svrSession, reader, isDrain)
 	if err != nil {
 		if errors.Cause(err) != io.EOF {
 			log.Record(&log.AccessMessage{

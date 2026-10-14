@@ -3,6 +3,7 @@ package protocol
 import (
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/serial"
+	"sync/atomic"
 )
 
 func (u *User) GetTypedAccount() (Account, error) {
@@ -59,7 +60,8 @@ func ToProtoUser(mu *MemoryUser) *User {
 
 // MemoryUser is a parsed form of User, to reduce number of parsing of Account proto.
 type MemoryUser struct {
-	Account Account
-	Email   string
-	Level   uint32
+	runtimeStats atomic.Pointer[userStats]
+	Account      Account
+	Email        string
+	Level        uint32
 }

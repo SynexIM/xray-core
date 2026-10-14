@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/net"
@@ -58,7 +59,7 @@ func TestRequestSerialization(t *testing.T) {
 	actualRequest, err := server.DecodeRequestHeader(buffer, false)
 	common.Must(err)
 
-	if r := cmp.Diff(actualRequest, expectedRequest, cmp.AllowUnexported(protocol.ID{})); r != "" {
+	if r := cmp.Diff(actualRequest, expectedRequest, cmp.AllowUnexported(protocol.ID{}), cmpopts.IgnoreFields(protocol.MemoryUser{}, "runtimeStats")); r != "" {
 		t.Error(r)
 	}
 
@@ -147,7 +148,7 @@ func TestMuxRequest(t *testing.T) {
 	actualRequest, err := server.DecodeRequestHeader(buffer, false)
 	common.Must(err)
 
-	if r := cmp.Diff(actualRequest, expectedRequest, cmp.AllowUnexported(protocol.ID{})); r != "" {
+	if r := cmp.Diff(actualRequest, expectedRequest, cmp.AllowUnexported(protocol.ID{}), cmpopts.IgnoreFields(protocol.MemoryUser{}, "runtimeStats")); r != "" {
 		t.Error(r)
 	}
 }

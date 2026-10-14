@@ -5,6 +5,7 @@ message GetRequest {}
 message GetResponse {
   string version = 1;
   repeated string capabilities = 2;
+  map<string,uint64> limits = 3;
 }
 service CapabilityService { rpc Get(GetRequest) returns (GetResponse); }
 message Config {}

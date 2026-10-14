@@ -13,8 +13,9 @@ var Release string
 
 var registry = struct {
 	sync.RWMutex
-	names map[string]struct{}
-}{names: make(map[string]struct{})}
+	names  map[string]struct{}
+	limits map[string]uint64
+}{names: make(map[string]struct{}), limits: make(map[string]uint64)}
 
 // Register declares a capability; repeated declarations are harmless.
 func Register(name string) {

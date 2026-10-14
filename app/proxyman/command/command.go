@@ -54,7 +54,7 @@ func (op *AddUserOperation) ApplyInbound(ctx context.Context, handler inbound.Ha
 	if err != nil {
 		return errors.New("failed to parse user").Base(err)
 	}
-	if err := um.AddUser(ctx, mUser); err != nil {
+	if err := addUserWithStats(ctx, handler, um, mUser); err != nil {
 		return err
 	}
 	return nil
@@ -91,7 +91,7 @@ func (op *AddUsersOperation) ApplyInbound(ctx context.Context, handler inbound.H
 		}
 		users = append(users, mUser)
 	}
-	if err := applyAddUsers(ctx, um, users); err != nil {
+	if err := addUsersWithStats(ctx, handler, um, users); err != nil {
 		return err
 	}
 	return nil
@@ -139,10 +139,15 @@ func removeUsers(ctx context.Context, um proxy.UserManager, emails []string) err
 		}
 	} else {
 		for _, email := range emails {
+			user := um.GetUser(ctx, email)
 			if err := um.RemoveUser(ctx, email); err != nil {
 				return err
 			}
+			if user != nil {
+				user.RevokeRuntimeSessions()
+			}
 		}
+		return nil
 	}
 
 	for _, u := range stale {

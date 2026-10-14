@@ -86,6 +86,9 @@ func (s *statsServer) GetAllOnlineUsers(ctx context.Context, request *GetAllOnli
 }
 
 func (s *statsServer) GetUsersStats(ctx context.Context, request *GetUsersStatsRequest) (*GetUsersStatsResponse, error) {
+	if request.OnlyChanged {
+		return s.changedUsersStats(request)
+	}
 	if len(request.Emails) > 0 {
 		return s.scopedUsersStats(request)
 	}

@@ -153,7 +153,7 @@ func (*DefaultDispatcher) Start() error {
 // Close implements common.Closable.
 func (*DefaultDispatcher) Close() error { return nil }
 
-func (d *DefaultDispatcher) getLink(ctx context.Context, destination net.Destination) (*transport.Link, *transport.Link) {
+func (d *DefaultDispatcher) getLink(ctx context.Context, destination net.Destination) (*transport.Link, *transport.Link, error) {
 	opt := pipe.OptionsFromContext(ctx)
 	uplinkReader, uplinkWriter := pipe.New(opt...)
 	downlinkReader, downlinkWriter := pipe.New(opt...)
@@ -175,11 +175,10 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, destination net.Destina
 	}
 
 	// 统计要按 email 归集，所以这一段确实需要它。
-	if user != nil && len(user.Email) > 0 {
+	if user != nil && user.Stats() != nil && len(user.Email) > 0 {
 		p := d.policy.ForLevel(user.Level)
 		if p.Stats.UserUplink {
-			name := "user>>>" + user.Email + ">>>traffic>>>uplink"
-			if c, _ := d.stats.GetOrRegisterCounter(name); c != nil {
+			if c := user.Stats().Uplink(); c != nil {
 				inboundLink.Writer = &SizeStatWriter{
 					Counter: c,
 					Writer:  inboundLink.Writer,
@@ -187,8 +186,7 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, destination net.Destina
 			}
 		}
 		if p.Stats.UserDownlink {
-			name := "user>>>" + user.Email + ">>>traffic>>>downlink"
-			if c, _ := d.stats.GetOrRegisterCounter(name); c != nil {
+			if c := user.Stats().Downlink(); c != nil {
 				outboundLink.Writer = &SizeStatWriter{
 					Counter: c,
 					Writer:  outboundLink.Writer,
@@ -198,21 +196,29 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, destination net.Destina
 
 		if p.Stats.UserSite {
 			if site := siteKey(destination); site != "" {
-				if c, _ := d.stats.GetOrRegisterCounter(siteCounterName(user.Email, site, "uplink")); c != nil {
+				counter, err := user.Stats().SiteCounter(siteCounterName(user.Email, site, "uplink"))
+				if err != nil {
+					return nil, nil, err
+				}
+				if c := counter; c != nil {
 					inboundLink.Writer = &SizeStatWriter{Counter: c, Writer: inboundLink.Writer}
 				}
-				if c, _ := d.stats.GetOrRegisterCounter(siteCounterName(user.Email, site, "downlink")); c != nil {
+				counter, err = user.Stats().SiteCounter(siteCounterName(user.Email, site, "downlink"))
+				if err != nil {
+					return nil, nil, err
+				}
+				if c := counter; c != nil {
 					outboundLink.Writer = &SizeStatWriter{Counter: c, Writer: outboundLink.Writer}
 				}
 			}
 		}
 
 		if p.Stats.UserOnline {
-			trackOnlineIP(ctx, d.stats, user.Email, sessionInbound.Source.Address.String())
+			trackOnlineIP(ctx, user.Stats().Online(), sessionInbound.Source.Address.String())
 		}
 	}
 
-	return inboundLink, outboundLink
+	return inboundLink, outboundLink, nil
 }
 
 // siteKey returns the per-destination "site" label for traffic aggregation: the
@@ -233,28 +239,29 @@ func siteCounterName(email, site, dir string) string {
 	return "user>>>" + email + ">>>site>>>" + site + ">>>traffic>>>" + dir
 }
 
-func WrapLink(ctx context.Context, policyManager policy.Manager, statsManager stats.Manager, link *transport.Link) *transport.Link {
+func WrapLink(ctx context.Context, policyManager policy.Manager, statsManager stats.Manager, link *transport.Link) (*transport.Link, error) {
 	sessionInbound := session.InboundFromContext(ctx)
 	var user *protocol.MemoryUser
 	if sessionInbound != nil {
 		user = sessionInbound.User
+	}
+	if err := prepareConnectionStats(user, statsManager, policyManager); err != nil {
+		return nil, err
 	}
 
 	timeoutReader := &buf.TimeoutWrapperReader{Reader: link.Reader}
 	link.Reader = timeoutReader
 
 	// 统计要按 email 归集，所以这一段确实需要它。
-	if user != nil && len(user.Email) > 0 {
+	if user != nil && user.Stats() != nil && len(user.Email) > 0 {
 		p := policyManager.ForLevel(user.Level)
 		if p.Stats.UserUplink {
-			name := "user>>>" + user.Email + ">>>traffic>>>uplink"
-			if c, _ := statsManager.GetOrRegisterCounter(name); c != nil {
+			if c := user.Stats().Uplink(); c != nil {
 				timeoutReader.Counter = c
 			}
 		}
 		if p.Stats.UserDownlink {
-			name := "user>>>" + user.Email + ">>>traffic>>>downlink"
-			if c, _ := statsManager.GetOrRegisterCounter(name); c != nil {
+			if c := user.Stats().Downlink(); c != nil {
 				link.Writer = &SizeStatWriter{
 					Counter: c,
 					Writer:  link.Writer,
@@ -263,23 +270,31 @@ func WrapLink(ctx context.Context, policyManager policy.Manager, statsManager st
 		}
 		if p.Stats.UserSite {
 			if site := siteKey(outboundTarget(ctx)); site != "" {
-				if c, _ := statsManager.GetOrRegisterCounter(siteCounterName(user.Email, site, "uplink")); c != nil {
+				counter, err := user.Stats().SiteCounter(siteCounterName(user.Email, site, "uplink"))
+				if err != nil {
+					return nil, err
+				}
+				if c := counter; c != nil {
 					// timeoutReader already counts uplink bytes when its Counter is
 					// set; chain a site reader so both per-user and per-site count.
 					link.Reader = &siteReadCounter{Reader: link.Reader, counter: c}
 				}
-				if c, _ := statsManager.GetOrRegisterCounter(siteCounterName(user.Email, site, "downlink")); c != nil {
+				counter, err = user.Stats().SiteCounter(siteCounterName(user.Email, site, "downlink"))
+				if err != nil {
+					return nil, err
+				}
+				if c := counter; c != nil {
 					link.Writer = &SizeStatWriter{Counter: c, Writer: link.Writer}
 				}
 			}
 		}
 
 		if p.Stats.UserOnline {
-			trackOnlineIP(ctx, statsManager, user.Email, sessionInbound.Source.Address.String())
+			trackOnlineIP(ctx, user.Stats().Online(), sessionInbound.Source.Address.String())
 		}
 	}
 
-	return link
+	return link, nil
 }
 
 // outboundTarget returns the resolved destination for the current connection, set
@@ -295,18 +310,22 @@ func outboundTarget(ctx context.Context) net.Destination {
 // trackConnectionStats reserves the protocol-agnostic user slot and, when stats is
 // enabled, increments process-local inbound and user gauges. Every successful
 // increment is released once when the connection context ends.
-func trackConnectionStats(ctx context.Context, sm stats.Manager) error {
+func trackConnectionStats(ctx context.Context, sm stats.Manager, pm policy.Manager) error {
 	sessionInbound := session.InboundFromContext(ctx)
 	if sessionInbound == nil {
 		return nil
 	}
+	if err := prepareConnectionStats(sessionInbound.User, sm, pm); err != nil {
+		return err
+	}
 	releases := make([]func(), 0, 3)
 	if user := sessionInbound.User; user != nil {
 		if user.Email != "" && !isNoopStatsManager(sm) {
-			counter, err := sm.GetOrRegisterCounter(stats.ActiveUserConnectionCounterName(user.Email))
-			if err != nil {
-				return errors.New("register active user connection counter").Base(err)
+			var counter stats.Counter
+			if user.Stats() != nil {
+				counter = user.Stats().Active()
 			}
+
 			if counter != nil {
 				counter.Add(1)
 				releases = append(releases, func() { counter.Add(-1) })
@@ -340,11 +359,10 @@ func releaseAll(releases []func()) {
 	}
 }
 
-func trackOnlineIP(ctx context.Context, sm stats.Manager, email, ip string) {
-	name := "user>>>" + email + ">>>online"
-	if om, _ := sm.GetOrRegisterOnlineMap(name); om != nil {
-		om.AddIP(ip)
-		context.AfterFunc(ctx, func() { om.RemoveIP(ip) })
+func trackOnlineIP(ctx context.Context, online stats.OnlineMap, ip string) {
+	if online != nil {
+		online.AddIP(ip)
+		context.AfterFunc(ctx, func() { online.RemoveIP(ip) })
 	}
 }
 
@@ -387,7 +405,7 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 	if !destination.IsValid() {
 		panic("Dispatcher: Invalid destination.")
 	}
-	if err := trackConnectionStats(ctx, d.stats); err != nil {
+	if err := trackConnectionStats(ctx, d.stats, d.policy); err != nil {
 		return nil, err
 	}
 	outbounds := session.OutboundsFromContext(ctx)
@@ -405,7 +423,10 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 	}
 
 	sniffingRequest := content.SniffingRequest
-	inbound, outbound := d.getLink(ctx, destination)
+	inbound, outbound, err := d.getLink(ctx, destination)
+	if err != nil {
+		return nil, err
+	}
 	if !sniffingRequest.Enabled {
 		go d.routedDispatch(ctx, outbound, destination)
 	} else {
@@ -447,7 +468,7 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 	if !destination.IsValid() {
 		return errors.New("Dispatcher: Invalid destination.")
 	}
-	if err := trackConnectionStats(ctx, d.stats); err != nil {
+	if err := trackConnectionStats(ctx, d.stats, d.policy); err != nil {
 		return err
 	}
 	outbounds := session.OutboundsFromContext(ctx)
@@ -463,7 +484,11 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 		content = new(session.Content)
 		ctx = session.ContextWithContent(ctx, content)
 	}
-	outbound = WrapLink(ctx, d.policy, d.stats, outbound)
+	wrapped, err := WrapLink(ctx, d.policy, d.stats, outbound)
+	if err != nil {
+		return err
+	}
+	outbound = wrapped
 	sniffingRequest := content.SniffingRequest
 	if !sniffingRequest.Enabled {
 		d.routedDispatch(ctx, outbound, destination)

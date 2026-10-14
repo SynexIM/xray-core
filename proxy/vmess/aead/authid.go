@@ -2,6 +2,7 @@ package aead
 
 import (
 	"bytes"
+	"container/list"
 	"crypto/aes"
 	"crypto/cipher"
 	rand3 "crypto/rand"
@@ -9,8 +10,7 @@ import (
 	"errors"
 	"hash/crc32"
 	"io"
-	"math"
-	"time"
+	"sync/atomic"
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/antireplay"
@@ -68,17 +68,20 @@ func (aidd *AuthIDDecoder) Decode(data [16]byte) (int64, uint32, int32, []byte) 
 }
 
 func NewAuthIDDecoderHolder() *AuthIDDecoderHolder {
-	return &AuthIDDecoderHolder{make(map[string]*AuthIDDecoderItem), antireplay.NewMapFilter[[16]byte](120)}
+	return &AuthIDDecoderHolder{index: newDecoderIndex(), filter: antireplay.NewMapFilter[[16]byte](120)}
 }
 
 type AuthIDDecoderHolder struct {
-	decoders map[string]*AuthIDDecoderItem
-	filter   *antireplay.ReplayFilter[[16]byte]
+	index  *decoderIndex
+	filter *antireplay.ReplayFilter[[16]byte]
 }
 
 type AuthIDDecoderItem struct {
-	dec    *AuthIDDecoder
-	ticket interface{}
+	dec      *AuthIDDecoder
+	ticket   interface{}
+	segment  byte
+	position *list.Element
+	removed  atomic.Bool
 }
 
 func NewAuthIDDecoderItem(key [16]byte, ticket interface{}) *AuthIDDecoderItem {
@@ -88,34 +91,12 @@ func NewAuthIDDecoderItem(key [16]byte, ticket interface{}) *AuthIDDecoderItem {
 	}
 }
 
-func (a *AuthIDDecoderHolder) AddUser(key [16]byte, ticket interface{}) {
-	a.decoders[string(key[:])] = NewAuthIDDecoderItem(key, ticket)
-}
-
-func (a *AuthIDDecoderHolder) RemoveUser(key [16]byte) {
-	delete(a.decoders, string(key[:]))
-}
-
-func (a *AuthIDDecoderHolder) Match(authID [16]byte) (interface{}, error) {
-	for _, v := range a.decoders {
-		t, z, _, d := v.dec.Decode(authID)
-		if z != crc32.ChecksumIEEE(d[:12]) {
-			continue
-		}
-
-		if t < 0 {
-			return nil, ErrNeagtiveTime
-		}
-
-		if math.Abs(math.Abs(float64(t))-float64(time.Now().Unix())) > 120 {
-			return nil, ErrInvalidTime
-		}
-
-		if !a.filter.Check(authID) {
-			return nil, ErrReplay
-		}
-
-		return v.ticket, nil
+func (a *AuthIDDecoderHolder) AddUser(key [16]byte, ticket interface{}) { a.index.add(key, ticket) }
+func (a *AuthIDDecoderHolder) RemoveUser(key [16]byte)                  { a.index.remove(key) }
+func (a *AuthIDDecoderHolder) Match(authID [16]byte, sourceIP ...string) (interface{}, error) {
+	source := ""
+	if len(sourceIP) > 0 {
+		source = sourceIP[0]
 	}
-	return nil, ErrNotFound
+	return a.matchSource(authID, source)
 }

@@ -56,6 +56,8 @@ type AlwaysOnInboundHandler struct {
 	workers        []worker
 	mux            *mux.Server
 	tag            string
+	statsRegistry  stats.UserRegistry
+	userPolicy     policy.Manager
 }
 
 func NewAlwaysOnInboundHandler(ctx context.Context, tag string, receiverConfig *proxyman.ReceiverConfig, proxyConfig interface{}) (*AlwaysOnInboundHandler, error) {
@@ -99,6 +101,9 @@ func NewAlwaysOnInboundHandler(ctx context.Context, tag string, receiverConfig *
 		tag:            tag,
 	}
 
+	if err := h.initializeUserStats(ctx); err != nil {
+		return nil, err
+	}
 	uplinkCounter, downlinkCounter := getStatCounter(core.MustFromContext(ctx), tag)
 
 	nl := p.Network()
@@ -206,6 +211,7 @@ func (h *AlwaysOnInboundHandler) Start() error {
 
 // Close implements common.Closable.
 func (h *AlwaysOnInboundHandler) Close() error {
+	h.releaseUserStats()
 	h.lifecycle.Lock()
 	defer h.lifecycle.Unlock()
 	if h.closed {

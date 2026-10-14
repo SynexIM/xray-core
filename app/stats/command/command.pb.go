@@ -720,6 +720,7 @@ type GetUsersStatsRequest struct {
 	IncludeTraffic bool                   `protobuf:"varint,1,opt,name=include_traffic,json=includeTraffic,proto3" json:"include_traffic,omitempty"`
 	Reset_         bool                   `protobuf:"varint,2,opt,name=reset,proto3" json:"reset,omitempty"`
 	Emails         []string               `protobuf:"bytes,3,rep,name=emails,proto3" json:"emails,omitempty"`
+	OnlyChanged    bool                   `protobuf:"varint,4,opt,name=only_changed,json=onlyChanged,proto3" json:"only_changed,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -773,6 +774,13 @@ func (x *GetUsersStatsRequest) GetEmails() []string {
 		return x.Emails
 	}
 	return nil
+}
+
+func (x *GetUsersStatsRequest) GetOnlyChanged() bool {
+	if x != nil {
+		return x.OnlyChanged
+	}
+	return false
 }
 
 type GetUsersStatsResponse struct {
@@ -906,11 +914,12 @@ const file_app_stats_command_command_proto_rawDesc = "" +
 	"\bUserStat\x12\x14\n" +
 	"\x05email\x18\x01 \x01(\tR\x05email\x127\n" +
 	"\x03ips\x18\x02 \x03(\v2%.xray.app.stats.command.OnlineIPEntryR\x03ips\x12A\n" +
-	"\atraffic\x18\x03 \x01(\v2'.xray.app.stats.command.TrafficUserStatR\atraffic\"m\n" +
+	"\atraffic\x18\x03 \x01(\v2'.xray.app.stats.command.TrafficUserStatR\atraffic\"\x90\x01\n" +
 	"\x14GetUsersStatsRequest\x12'\n" +
 	"\x0finclude_traffic\x18\x01 \x01(\bR\x0eincludeTraffic\x12\x14\n" +
 	"\x05reset\x18\x02 \x01(\bR\x05reset\x12\x16\n" +
-	"\x06emails\x18\x03 \x03(\tR\x06emails\"O\n" +
+	"\x06emails\x18\x03 \x03(\tR\x06emails\x12!\n" +
+	"\fonly_changed\x18\x04 \x01(\bR\vonlyChanged\"O\n" +
 	"\x15GetUsersStatsResponse\x126\n" +
 	"\x05users\x18\x01 \x03(\v2 .xray.app.stats.command.UserStatR\x05users\"\b\n" +
 	"\x06Config2\x86\x06\n" +

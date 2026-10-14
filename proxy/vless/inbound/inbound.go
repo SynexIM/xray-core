@@ -251,7 +251,6 @@ func (h *Handler) RemoveUser(ctx context.Context, e string) error {
 	if err := h.validator.Del(e); err != nil {
 		return err
 	}
-	cleanupUserStats(h.stats, e)
 	return nil
 }
 
@@ -635,7 +634,11 @@ func (h *Handler) Process(ctx context.Context, network net.Network, connection s
 		if err != nil {
 			return err
 		}
-		return r.NewMux(ctx, dispatcher.WrapLink(ctx, h.policyManager, h.stats, &transport.Link{Reader: clientReader, Writer: clientWriter}), h.observer)
+		link, err := dispatcher.WrapLink(ctx, h.policyManager, h.stats, &transport.Link{Reader: clientReader, Writer: clientWriter})
+		if err != nil {
+			return err
+		}
+		return r.NewMux(ctx, link, h.observer)
 	}
 
 	if err := dispatch.DispatchLink(
@@ -647,16 +650,6 @@ func (h *Handler) Process(ctx context.Context, network net.Network, connection s
 		return errors.New("failed to dispatch request").Base(err)
 	}
 	return nil
-}
-
-func cleanupUserStats(sm stats.Manager, email string) {
-	if sm == nil || email == "" {
-		return
-	}
-	prefix := "user>>>" + email + ">>>"
-	sm.UnregisterCounter(prefix + "traffic>>>uplink")
-	sm.UnregisterCounter(prefix + "traffic>>>downlink")
-	sm.UnregisterOnlineMap(prefix + "online")
 }
 
 type Reverse struct {

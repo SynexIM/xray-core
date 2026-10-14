@@ -124,7 +124,7 @@ func parseSecurityType(b byte) protocol.SecurityType {
 }
 
 // DecodeRequestHeader decodes and returns (if successful) a RequestHeader from an input stream.
-func (s *ServerSession) DecodeRequestHeader(reader io.Reader, isDrain bool) (*protocol.RequestHeader, error) {
+func (s *ServerSession) DecodeRequestHeader(reader io.Reader, isDrain bool, sourceIP ...string) (*protocol.RequestHeader, error) {
 	buffer := buf.New()
 
 	drainer, err := drain.NewBehaviorSeedLimitedDrainer(int64(s.userValidator.GetBehaviorSeed()), 16+38, 3266, 64)
@@ -152,7 +152,7 @@ func (s *ServerSession) DecodeRequestHeader(reader io.Reader, isDrain bool) (*pr
 	var decryptor io.Reader
 	var vmessAccount *vmess.MemoryAccount
 
-	user, foundAEAD, errorAEAD := s.userValidator.GetAEAD(buffer.Bytes())
+	user, foundAEAD, errorAEAD := s.userValidator.GetAEAD(buffer.Bytes(), sourceIP...)
 
 	var fixedSizeAuthID [16]byte
 	copy(fixedSizeAuthID[:], buffer.Bytes())

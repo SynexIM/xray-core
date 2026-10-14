@@ -13,7 +13,7 @@ type service struct {
 }
 
 func (*service) Get(context.Context, *GetRequest) (*GetResponse, error) {
-	return &GetResponse{Version: capability.Version(), Capabilities: capability.List()}, nil
+	return &GetResponse{Version: capability.Version(), Capabilities: capability.List(), Limits: capability.Limits()}, nil
 }
 
 func (s *service) Register(server *grpc.Server) { RegisterCapabilityServiceServer(server, s) }

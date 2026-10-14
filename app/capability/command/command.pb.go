@@ -61,6 +61,7 @@ type GetResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Version       string                 `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
 	Capabilities  []string               `protobuf:"bytes,2,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	Limits        map[string]uint64      `protobuf:"bytes,3,rep,name=limits,proto3" json:"limits,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -109,6 +110,13 @@ func (x *GetResponse) GetCapabilities() []string {
 	return nil
 }
 
+func (x *GetResponse) GetLimits() map[string]uint64 {
+	if x != nil {
+		return x.Limits
+	}
+	return nil
+}
+
 type Config struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -151,10 +159,14 @@ const file_app_capability_command_command_proto_rawDesc = "" +
 	"\n" +
 	"$app/capability/command/command.proto\x12\x1bxray.app.capability.command\"\f\n" +
 	"\n" +
-	"GetRequest\"K\n" +
+	"GetRequest\"\xd4\x01\n" +
 	"\vGetResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\"\n" +
-	"\fcapabilities\x18\x02 \x03(\tR\fcapabilities\"\b\n" +
+	"\fcapabilities\x18\x02 \x03(\tR\fcapabilities\x12L\n" +
+	"\x06limits\x18\x03 \x03(\v24.xray.app.capability.command.GetResponse.LimitsEntryR\x06limits\x1a9\n" +
+	"\vLimitsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01\"\b\n" +
 	"\x06Config2m\n" +
 	"\x11CapabilityService\x12X\n" +
 	"\x03Get\x12'.xray.app.capability.command.GetRequest\x1a(.xray.app.capability.command.GetResponseB2Z0github.com/xtls/xray-core/app/capability/commandb\x06proto3"
@@ -171,20 +183,22 @@ func file_app_capability_command_command_proto_rawDescGZIP() []byte {
 	return file_app_capability_command_command_proto_rawDescData
 }
 
-var file_app_capability_command_command_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_app_capability_command_command_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_app_capability_command_command_proto_goTypes = []any{
 	(*GetRequest)(nil),  // 0: xray.app.capability.command.GetRequest
 	(*GetResponse)(nil), // 1: xray.app.capability.command.GetResponse
 	(*Config)(nil),      // 2: xray.app.capability.command.Config
+	nil,                 // 3: xray.app.capability.command.GetResponse.LimitsEntry
 }
 var file_app_capability_command_command_proto_depIdxs = []int32{
-	0, // 0: xray.app.capability.command.CapabilityService.Get:input_type -> xray.app.capability.command.GetRequest
-	1, // 1: xray.app.capability.command.CapabilityService.Get:output_type -> xray.app.capability.command.GetResponse
-	1, // [1:2] is the sub-list for method output_type
-	0, // [0:1] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	3, // 0: xray.app.capability.command.GetResponse.limits:type_name -> xray.app.capability.command.GetResponse.LimitsEntry
+	0, // 1: xray.app.capability.command.CapabilityService.Get:input_type -> xray.app.capability.command.GetRequest
+	1, // 2: xray.app.capability.command.CapabilityService.Get:output_type -> xray.app.capability.command.GetResponse
+	2, // [2:3] is the sub-list for method output_type
+	1, // [1:2] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_app_capability_command_command_proto_init() }
@@ -198,7 +212,7 @@ func file_app_capability_command_command_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_app_capability_command_command_proto_rawDesc), len(file_app_capability_command_command_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

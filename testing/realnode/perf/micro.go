@@ -50,7 +50,11 @@ func authBenchmark() ([]measurement, error) {
 			}
 			authID := aead.CreateAuthID(keys[index][:], time.Now().Unix())
 			start := time.Now()
-			_, found, err := validator.GetAEAD(authID[:])
+			source := ""
+			if scenario == "vmess_source_cache_20000" {
+				source = "192.0.2.1"
+			}
+			_, found, err := validator.GetAEAD(authID[:], source)
 			values[sample] = float64(time.Since(start).Nanoseconds()) / 1000
 			if err != nil || !found {
 				return nil, fmt.Errorf("VMess 认证: %v", err)
@@ -108,6 +112,9 @@ func memoryBenchmark(count int) ([]measurement, error) {
 		email := fmt.Sprintf("v%d", index)
 		user := &protocol.MemoryUser{Email: email, Account: &vless.MemoryAccount{ID: protocol.NewID(identity(index))}}
 
+		if err := user.PrepareStats(manager, true, true, true); err != nil {
+			return nil, err
+		}
 		if err := validator.Add(user); err != nil {
 			return nil, err
 		}

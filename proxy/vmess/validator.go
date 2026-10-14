@@ -6,6 +6,7 @@ import (
 	"hash/crc64"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/xtls/xray-core/common/dice"
 	"github.com/xtls/xray-core/common/errors"
@@ -14,10 +15,6 @@ import (
 )
 
 // TimedUserValidator is a user Validator based on time.
-//
-// index 是 strings.ToLower(email) → users 下标：Remove 原来线性扫 email，
-// 5 万实例/单节点组下管理路径就是 O(N)。认证路径（GetAEAD）本来就是 O(1)
-// 哈希查表，没动。
 type TimedUserValidator struct {
 	sync.RWMutex
 	users []*protocol.MemoryUser
@@ -26,6 +23,7 @@ type TimedUserValidator struct {
 	behaviorSeed  uint64
 	behaviorFused bool
 
+	authentication    authenticationHistogram
 	aeadDecoderHolder *aead.AuthIDDecoderHolder
 }
 
@@ -43,6 +41,22 @@ func (v *TimedUserValidator) Add(u *protocol.MemoryUser) error {
 	v.Lock()
 	defer v.Unlock()
 
+	account, ok := u.Account.(*MemoryAccount)
+	if !ok {
+		return errors.New("account type is incorrect")
+	}
+	if len(v.users) >= MaxUsersPerInbound {
+		return &UserCapacityError{Maximum: MaxUsersPerInbound}
+	}
+	if u.Email != "" {
+		if _, exists := v.index[strings.ToLower(u.Email)]; exists {
+			return errors.New("User ", u.Email, " already exists.")
+		}
+	}
+	v.addLocked(u, account)
+	return nil
+}
+func (v *TimedUserValidator) addLocked(u *protocol.MemoryUser, account *MemoryAccount) {
 	if u.Email != "" {
 		if v.index == nil {
 			v.index = make(map[string]int)
@@ -51,10 +65,6 @@ func (v *TimedUserValidator) Add(u *protocol.MemoryUser) error {
 	}
 	v.users = append(v.users, u)
 
-	account, ok := u.Account.(*MemoryAccount)
-	if !ok {
-		return errors.New("account type is incorrect")
-	}
 	if !v.behaviorFused {
 		hashkdf := hmac.New(sha256.New, []byte("VMESSBSKDF"))
 		hashkdf.Write(account.ID.Bytes())
@@ -65,7 +75,6 @@ func (v *TimedUserValidator) Add(u *protocol.MemoryUser) error {
 	copy(cmdkeyfl[:], account.ID.CmdKey())
 	v.aeadDecoderHolder.AddUser(cmdkeyfl, u)
 
-	return nil
 }
 
 func (v *TimedUserValidator) GetUsers() []*protocol.MemoryUser {
@@ -82,14 +91,16 @@ func (v *TimedUserValidator) GetCount() int64 {
 	return int64(len(v.users))
 }
 
-func (v *TimedUserValidator) GetAEAD(userHash []byte) (*protocol.MemoryUser, bool, error) {
+func (v *TimedUserValidator) GetAEAD(userHash []byte, sourceIP ...string) (*protocol.MemoryUser, bool, error) {
+	start := time.Now()
+	defer func() { v.authentication.observe(time.Since(start)) }()
 	v.RLock()
 	defer v.RUnlock()
 
 	var userHashFL [16]byte
 	copy(userHashFL[:], userHash)
 
-	userd, err := v.aeadDecoderHolder.Match(userHashFL)
+	userd, err := v.aeadDecoderHolder.Match(userHashFL, sourceIP...)
 	if err != nil {
 		return nil, false, err
 	}
@@ -101,10 +112,19 @@ func (v *TimedUserValidator) Remove(email string) bool {
 	defer v.Unlock()
 
 	email = strings.ToLower(email)
-	idx, ok := v.index[email]
+	_, ok := v.index[email]
 	if !ok {
 		return false
 	}
+	v.removeLocked(email)
+	return true
+}
+func (v *TimedUserValidator) removeLocked(email string) {
+	idx, ok := v.index[email]
+	if !ok {
+		return
+	}
+
 	var cmdkeyfl [16]byte
 	copy(cmdkeyfl[:], v.users[idx].Account.(*MemoryAccount).ID.CmdKey())
 	v.aeadDecoderHolder.RemoveUser(cmdkeyfl)
@@ -118,7 +138,6 @@ func (v *TimedUserValidator) Remove(email string) bool {
 	v.users[last] = nil
 	v.users = v.users[:last]
 
-	return true
 }
 
 func (v *TimedUserValidator) GetBehaviorSeed() uint64 {

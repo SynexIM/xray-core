@@ -20,6 +20,7 @@ type ipEntry struct {
 // IPs are tracked by reference counting: AddIP increments, RemoveIP decrements.
 // An IP is removed from the map when its reference count reaches zero.
 type OnlineMap struct {
+	owner   *userRecord
 	entries map[string]ipEntry
 	access  sync.Mutex
 	count   atomic.Int64
@@ -37,6 +38,11 @@ func (om *OnlineMap) AddIP(ip string) {
 	if ip == localhostIPv4 || ip == localhostIPv6 {
 		return
 	}
+	defer func() {
+		if om.owner != nil {
+			om.owner.markChanged()
+		}
+	}()
 	now := time.Now().Unix()
 	om.access.Lock()
 	defer om.access.Unlock()
@@ -61,6 +67,11 @@ func (om *OnlineMap) RemoveIP(ip string) {
 	if !ok {
 		return
 	}
+	defer func() {
+		if om.owner != nil {
+			om.owner.markChanged()
+		}
+	}()
 	e.refCount--
 	if e.refCount <= 0 {
 		delete(om.entries, ip)
