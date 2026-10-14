@@ -64,3 +64,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
+
+// REALITY 服务端补丁：接受只带 X25519 的 ClientHello（小火箭等旧客户端），见 third_party/reality/PATCH.md
+replace github.com/xtls/reality => ./third_party/reality
