@@ -127,7 +127,7 @@ func TestMultiBucketWaitStartsWithPausedStrictBucket(t *testing.T) {
 	pacer := &connectionPacer{flows: []*Flow{fast.NewFlow(), paused.NewFlow()}}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if err := pacer.Wait(ctx, 100); err != context.DeadlineExceeded {
+	if err := pacer.Wait(ctx, 100, false); err != context.DeadlineExceeded {
 		t.Fatalf("零份额没有阻塞: %v", err)
 	}
 	if fast.granted != 0 {

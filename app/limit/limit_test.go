@@ -65,13 +65,13 @@ func TestIndexUnionAndConditions(t *testing.T) {
 	if err := r.RemoveRules([]string{"all"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.inbounds) != 0 || len(r.users["b"]) != 0 {
+	if len(r.snapshot.Load().inbounds) != 0 || len(r.snapshot.Load().users["b"]) != 0 {
 		t.Fatal("增量删规则留下索引")
 	}
 	if err := r.AddRules([]*Rule{{RuleTag: "user", Profile: "p", User: []string{"c"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.users["a"]) != 0 || len(r.users["c"]) != 1 {
+	if len(r.snapshot.Load().users["a"]) != 0 || len(r.snapshot.Load().users["c"]) != 1 {
 		t.Fatal("替换规则没有原子更新索引")
 	}
 }

@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"math"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,29 +19,33 @@ const (
 	shaperMinSliceByte   = 1500
 )
 
+var shaperSequence atomic.Uint64
+
 var errShaperClosed = errors.New("limit: 整形器已关闭")
 
 type ladderBucket struct{ rate, depth, tokens float64 }
 
 // 一个规则一个方向的所有阶梯桶共用队列，避免串联桶各自 FIFO 带来的队头阻塞。
 type Shaper struct {
-	mu             sync.Mutex
-	buckets        []ladderBucket
-	rate, tokens   float64
-	last           time.Time
-	vtime, seq     uint64
-	queue          waitQueue
-	timer          *time.Timer
-	armed, closed  bool
-	active         map[*Flow]struct{}
-	lastSweep      time.Time
-	congested      bool
-	share          float64
-	granted, waits uint64
+	mu              sync.Mutex
+	number, version uint64
+	bulkFlows       int
+	buckets         []ladderBucket
+	rate, tokens    float64
+	last            time.Time
+	vtime, seq      uint64
+	queue           waitQueue
+	timer           *time.Timer
+	armed, closed   bool
+	active          map[*Flow]struct{}
+	lastSweep       time.Time
+	congested       bool
+	share           float64
+	granted, waits  uint64
 }
 
 func newShaper() *Shaper {
-	return &Shaper{last: time.Now(), active: map[*Flow]struct{}{}}
+	return &Shaper{number: shaperSequence.Add(1), last: time.Now(), active: map[*Flow]struct{}{}}
 }
 func (s *Shaper) Configure(l *Ladder) {
 	s.mu.Lock()
@@ -66,6 +72,7 @@ func (s *Shaper) Configure(l *Ladder) {
 		}
 	}
 	s.buckets = next
+	s.version++
 	s.updateRate()
 	s.rearmLocked()
 	s.dispatchLocked()
@@ -80,6 +87,10 @@ func (s *Shaper) setShare(congested bool, share float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.advance(time.Now())
+	if s.congested == congested && s.share == share {
+		return
+	}
+	s.version++
 	s.congested = congested
 	s.share = float64(share)
 	s.updateRate()
@@ -171,6 +182,7 @@ func (s *Shaper) sweep(now time.Time) {
 	s.lastSweep = now
 	for f := range s.active {
 		s.meter(f, now)
+		s.updateBulk(f)
 		if f.used == 0 && !f.waiting {
 			delete(s.active, f)
 		}
@@ -222,9 +234,14 @@ func (s *Shaper) updateRate() {
 		s.tokens = quantumBytesAt(rate)
 	}
 	s.rate = rate
+	s.version++
 	s.tokens = min(s.tokens, s.quantumBytes())
 }
 func (s *Shaper) grantLocked(f *Flow, n int) {
+	if s.rate == 0 && !s.congested {
+		s.granted += uint64(n)
+		return
+	}
 	s.tokens -= float64(n)
 	s.granted += uint64(n)
 	for i := range s.buckets {
@@ -232,6 +249,7 @@ func (s *Shaper) grantLocked(f *Flow, n int) {
 	}
 	f.used += float64(n)
 	s.active[f] = struct{}{}
+	s.updateBulk(f)
 	s.updateRate()
 }
 func (s *Shaper) ready(w *waiter) bool {
@@ -260,30 +278,30 @@ func (s *Shaper) ready(w *waiter) bool {
 	return true
 }
 func (s *Shaper) dispatchLocked() {
-	for s.queue.Len() > 0 && ((s.rate == 0 && !s.congested) || (s.rate > 0 && s.ready(s.queue[0]))) {
-		w := heap.Pop(&s.queue).(*waiter)
-		w.flow.waiting = false
-		s.grantLocked(w.flow, w.n)
-		if !w.sparse {
-			s.vtime = max(s.vtime, w.start)
+	for s.queue.Len() > 0 {
+		waiting := s.queue[0]
+		if waiting.group != nil {
+			waiting.group.wake()
+			return
 		}
-		close(w.ready)
+		if (s.rate != 0 || s.congested) && !s.ready(waiting) {
+			break
+		}
+		heap.Pop(&s.queue)
+		waiting.flow.waiting = false
+		s.grantLocked(waiting.flow, waiting.n)
+		if !waiting.sparse {
+			s.vtime = max(s.vtime, waiting.start)
+		}
+		waiting.signal()
 	}
 	if s.queue.Len() == 0 || s.armed || s.closed || (s.rate == 0 && s.congested) {
 		return
 	}
-	need := 1.0
-	if head := s.queue[0]; head.sparse {
-		need = float64(head.n) - s.quantumBytes()
-	}
-	delay := time.Duration(max(need-s.tokens, 1) / s.rate * float64(time.Second))
-	for _, b := range s.buckets {
-		need := 1.0
-		if head := s.queue[0]; head.sparse {
-			need = float64(head.n) - quantumBytesAt(b.rate)
-		}
-		wait := time.Duration(max(need-b.tokens, 1) / b.rate * float64(time.Second))
-		delay = max(delay, wait)
+	delay := s.waitDelayLocked(s.queue[0])
+	if delay < time.Millisecond {
+		s.queue[0].signal()
+		return
 	}
 	s.armed = true
 	if s.timer == nil {
@@ -292,6 +310,31 @@ func (s *Shaper) dispatchLocked() {
 		s.timer.Reset(delay)
 	}
 }
+func (s *Shaper) waitDelayLocked(waiting *waiter) time.Duration {
+	if s.rate == 0 {
+		if s.congested {
+			return time.Duration(math.MaxInt64)
+		}
+		return 0
+	}
+	need := 1.0
+	if waiting.sparse {
+		need = float64(waiting.n) - s.quantumBytes()
+	}
+	seconds := max(0, need-s.tokens) / s.rate
+	for _, bucket := range s.buckets {
+		need = 1
+		if waiting.sparse {
+			need = float64(waiting.n) - quantumBytesAt(bucket.rate)
+		}
+		seconds = max(seconds, max(0, need-bucket.tokens)/bucket.rate)
+	}
+	if seconds >= float64(math.MaxInt64)/float64(time.Second) {
+		return time.Duration(math.MaxInt64)
+	}
+	return time.Duration(seconds * float64(time.Second))
+}
+
 func (s *Shaper) onTimer() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -311,7 +354,7 @@ func (s *Shaper) close() {
 		w := heap.Pop(&s.queue).(*waiter)
 		w.flow.waiting = false
 		w.err = errShaperClosed
-		close(w.ready)
+		w.signal()
 	}
 	clear(s.active)
 }
@@ -320,7 +363,19 @@ func (f *Flow) release() {
 		return
 	}
 	f.s.mu.Lock()
+	if f.waiting && f.waiter.index >= 0 {
+		heap.Remove(&f.s.queue, f.waiter.index)
+		f.waiting = false
+		f.waiter.err = errShaperClosed
+		f.waiter.signal()
+	}
 	delete(f.s.active, f)
+	if f.bulk {
+		f.bulk = false
+		f.s.bulkFlows--
+		f.s.version++
+	}
+	f.s.dispatchLocked()
 	f.s.mu.Unlock()
 }
 
@@ -329,7 +384,7 @@ func (s *Shaper) NewFlow() *Flow {
 	if s == nil {
 		return nil
 	}
-	return &Flow{s: s, at: time.Now()}
+	return &Flow{s: s, at: time.Now(), ready: make(chan struct{}, 1)}
 }
 
 // Flow 是一条连接在整形器里的身份：finish 是满载时的虚拟结束标签，used 是按公平份额
@@ -340,10 +395,14 @@ type Flow struct {
 	used    float64
 	at      time.Time
 	waiting bool
+	bulk    bool
+	waiter  waiter
+	ready   chan struct{}
 }
 
 // Wait 阻塞到 n 字节全部被放行。稀疏连接直接放行（桶欠账），满载连接按 5ms 的片排队轮转。
-func (f *Flow) Wait(ctx context.Context, n int) error {
+func (f *Flow) Wait(ctx context.Context, n int) error { return f.wait(ctx, n, false) }
+func (f *Flow) wait(ctx context.Context, n int, datagram bool) error {
 	s := f.s
 	for n > 0 {
 		if err := ctx.Err(); err != nil {
@@ -357,15 +416,22 @@ func (f *Flow) Wait(ctx context.Context, n int) error {
 		now := time.Now()
 		s.advance(now)
 		if s.rate == 0 && !s.congested {
-			// 不限速也记账：调度器要靠它判断节点忙不忙。
 			s.granted += uint64(n)
 			s.mu.Unlock()
 			return nil
 		}
-		s.sweep(now)
 		s.meter(f, now)
+		if n <= 256 && s.sparse(f, n) && !s.sparseQueued() && s.ready(&waiter{n: n, sparse: true}) {
+			s.grantLocked(f, n)
+			s.mu.Unlock()
+			return nil
+		}
+		s.sweep(now)
 		chunk := min(n, s.sliceBytes())
-		sparse := s.sparse(f, chunk)
+		if datagram && float64(n) <= 2*s.quantumBytes() {
+			chunk = n
+		}
+		sparse := datagram || s.sparse(f, chunk)
 		free := s.queue.Len() == 0 && s.ready(&waiter{n: chunk})
 		if free || (sparse && !s.sparseQueued() && s.ready(&waiter{n: chunk, sparse: true})) {
 			s.grantLocked(f, chunk)
@@ -375,35 +441,65 @@ func (f *Flow) Wait(ctx context.Context, n int) error {
 		}
 		s.seq++
 		s.waits++
-		w := &waiter{flow: f, sparse: sparse, seq: s.seq, n: chunk, ready: make(chan struct{})}
-		if !sparse {
-			w.start = max(s.vtime, f.finish)
-			f.finish = w.start + uint64(chunk)
+		select {
+		case <-f.ready:
+		default:
 		}
-		heap.Push(&s.queue, w)
+		waiting := &f.waiter
+		*waiting = waiter{flow: f, sparse: sparse, seq: s.seq, n: chunk, ready: f.ready, index: -1}
+		if !sparse {
+			waiting.start = max(s.vtime, f.finish)
+			f.finish = waiting.start + uint64(chunk)
+		}
+		heap.Push(&s.queue, waiting)
 		f.waiting = true
 		s.active[f] = struct{}{}
 		s.dispatchLocked()
 		s.mu.Unlock()
-		select {
-		case <-w.ready:
-			if w.err != nil {
-				return w.err
-			}
-			n -= chunk
-		case <-ctx.Done():
-			s.mu.Lock()
-			if w.index >= 0 {
-				heap.Remove(&s.queue, w.index)
+		if err := f.await(ctx); err != nil {
+			return err
+		}
+		n -= chunk
+	}
+	return nil
+}
+func (f *Flow) await(ctx context.Context) error {
+	for {
+		s := f.s
+		s.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			if f.waiter.index >= 0 {
+				heap.Remove(&s.queue, f.waiter.index)
 				f.waiting = false
 				delete(s.active, f)
+				if f.bulk {
+					f.bulk = false
+					s.bulkFlows--
+					s.version++
+				}
 				s.dispatchLocked()
 			}
 			s.mu.Unlock()
-			return ctx.Err()
+			return err
+		}
+		s.advance(time.Now())
+		s.dispatchLocked()
+		if f.waiter.index < 0 {
+			err := f.waiter.err
+			s.mu.Unlock()
+			return err
+		}
+		shortWait := s.queue.Len() > 0 && s.queue[0].group == nil && s.waitDelayLocked(s.queue[0]) < time.Millisecond
+		s.mu.Unlock()
+		if shortWait {
+			runtime.Gosched()
+			continue
+		}
+		select {
+		case <-f.ready:
+		case <-ctx.Done():
 		}
 	}
-	return nil
 }
 
 // sparseQueued：已经有稀疏等待者（稀疏合计超了桶速率），新来的稀疏片按先来后到排在它后面。
@@ -419,6 +515,18 @@ type waiter struct {
 	index      int
 	ready      chan struct{}
 	err        error
+	group      *connectionPacer
+}
+
+func (waiting *waiter) signal() {
+	if waiting.group != nil {
+		waiting.group.wake()
+		return
+	}
+	select {
+	case waiting.ready <- struct{}{}:
+	default:
+	}
 }
 
 type waitQueue []*waiter

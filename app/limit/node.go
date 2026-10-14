@@ -271,13 +271,11 @@ func (r *Runtime) direction(buckets []*bucket, root, available, seconds float64,
 func (r *Runtime) tick(now time.Time) {
 	r.tickMu.Lock()
 	defer r.tickMu.Unlock()
+	buckets := r.activeBuckets()
 	r.mu.RLock()
-	buckets := make([]*bucket, 0, len(r.buckets))
-	for b := range r.buckets {
-		buckets = append(buckets, b)
-	}
 	node := r.node
 	r.mu.RUnlock()
+
 	seconds := now.Sub(r.lastTick).Seconds()
 	if seconds <= 0 {
 		return
@@ -307,25 +305,6 @@ func (r *Runtime) tick(now time.Time) {
 	// 不参与注水的流量仍占容量；只在剩余带宽里分份额，重叠规则不能重复扣除用量。
 	r.direction(buckets, root, max(0, root-max(0, upRate-eligibleUp)), seconds, true, upCongested)
 	r.direction(buckets, root, max(0, root-max(0, downRate-eligibleDown)), seconds, false, downCongested)
-	r.mu.Lock()
-	for _, b := range buckets {
-		b.mu.Lock()
-		b.expireIPs(now)
-		idle := b.connections == 0
-		since := b.idleSince
-		ips := len(b.ips)
-		b.mu.Unlock()
-		if !b.retired || !idle || ips > 0 {
-			continue
-		}
-		heavyWindow := time.Duration(b.profile.current.Load().GetCongested().GetHeavyWindowSeconds()) * time.Second
-		if now.Sub(since) < heavyWindow || b.up.idleTTL() > time.Millisecond || b.down.idleTTL() > time.Millisecond {
-			continue
-		}
-		delete(r.buckets, b)
-		delete(b.profile.members, b)
-		b.up.close()
-		b.down.close()
-	}
-	r.mu.Unlock()
+	r.removeIdleActive(buckets)
+	r.collectRetired(now)
 }

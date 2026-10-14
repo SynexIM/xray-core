@@ -3,7 +3,6 @@ package limit
 import (
 	"context"
 	"math"
-	"sort"
 	"sync/atomic"
 	"time"
 
@@ -17,26 +16,14 @@ type connectionPacer struct {
 	meter              *atomic.Uint64
 	participatingMeter *atomic.Uint64
 	datagram           bool
-}
-type flowRate struct {
-	flow *Flow
-	rate float64
+	rates              []flowRate
+	initialized        bool
+	notify             chan struct{}
+	timer              *time.Timer
+	closed             atomic.Bool
+	socket             *socketPacer
 }
 
-func (p *connectionPacer) Wait(ctx context.Context, n int) error {
-	rates := make([]flowRate, 0, len(p.flows))
-	for _, f := range p.flows {
-		rate := f.s.currentRate()
-		rates = append(rates, flowRate{f, rate})
-	}
-	sort.SliceStable(rates, func(i, j int) bool { return rates[i].rate < rates[j].rate })
-	for _, entry := range rates {
-		if err := entry.flow.Wait(ctx, n); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 func (p *connectionPacer) record(n int) {
 	if n == 0 {
 		return
@@ -55,9 +42,11 @@ func (p *connectionPacer) split(mb buf.MultiBuffer) (buf.MultiBuffer, buf.MultiB
 		remaining, first := buf.SplitFirst(mb)
 		return remaining, buf.MultiBuffer{first}
 	}
-	rate := math.Inf(1)
-	for _, f := range p.flows {
-		rate = min(rate, f.s.currentRate())
+	p.initialize()
+	rate := p.flows[0].s.currentRate()
+	if len(p.rates) > 0 {
+		p.refreshRates()
+		rate = p.rates[0].rate
 	}
 	size := int32(buf.Size)
 	if !math.IsInf(rate, 1) {
@@ -100,7 +89,7 @@ func (r *pacedReader) read(timeout time.Duration, timed bool) (buf.MultiBuffer, 
 	}
 	remaining, chunk := r.pacer.split(r.pending)
 	r.pending = remaining
-	if err := r.pacer.Wait(r.ctx, int(chunk.Len())); err != nil {
+	if err := r.pacer.Wait(r.ctx, int(chunk.Len()), r.pacer.datagram || chunk[0].UDP != nil); err != nil {
 		buf.ReleaseMulti(chunk)
 		r.pending = buf.ReleaseMulti(r.pending)
 		return nil, err
@@ -144,7 +133,7 @@ func (w *pacedWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
 		remaining, chunk := w.pacer.split(mb)
 		mb = remaining
 		n := int(chunk.Len())
-		if err := w.pacer.Wait(w.ctx, n); err != nil {
+		if err := w.pacer.Wait(w.ctx, n, w.pacer.datagram || chunk[0].UDP != nil); err != nil {
 			buf.ReleaseMulti(chunk)
 			buf.ReleaseMulti(mb)
 			return err

@@ -46,6 +46,7 @@ type bucket struct {
 	connections uint32
 	ips         map[string]*sourceState
 	idleSince   time.Time
+	active      bool
 	retired     bool        // Runtime.mu 保护
 	fair        bucketUsage // 只由维护 goroutine 访问
 }
@@ -54,14 +55,15 @@ type indexedRule struct {
 	user, inbound, outbound map[string]struct{}
 	bucket                  *bucket
 }
-type ruleIndex map[string]map[string]*indexedRule
 
 // Runtime 管理规则生命周期；令牌等待只锁每个方向的桶，不持有规则表锁。
 type Runtime struct {
 	mu                                         sync.RWMutex
 	profiles                                   map[string]*profileState
 	rules                                      map[string]*indexedRule
-	users, inbounds, outbounds                 ruleIndex
+	snapshot                                   atomic.Pointer[ruleSnapshot]
+	active                                     [activeBucketShards]activeBucketShard
+	retired                                    []*bucket
 	buckets                                    map[*bucket]struct{}
 	node                                       *NodeLimit
 	upBytes, downBytes                         atomic.Uint64
@@ -84,8 +86,10 @@ func New(c *Config) (*Runtime, error) {
 	}
 	r := &Runtime{
 		profiles: map[string]*profileState{}, rules: map[string]*indexedRule{},
-		users: ruleIndex{}, inbounds: ruleIndex{}, outbounds: ruleIndex{},
 		buckets: map[*bucket]struct{}{}, done: make(chan struct{}), lastTick: time.Now(),
+	}
+	for index := range r.active {
+		r.active[index].buckets = make(map[*bucket]struct{})
 	}
 	if err := r.PutProfiles(c.Profiles); err != nil {
 		return nil, err
@@ -133,6 +137,7 @@ func (r *Runtime) Close() error {
 		return nil
 	}
 	r.closed = true
+	r.snapshot.Store(&ruleSnapshot{closed: true})
 	started := r.started
 	if r.cancel != nil {
 		r.cancel()
@@ -232,26 +237,9 @@ func stringSet(list []string) map[string]struct{} {
 	}
 	return result
 }
-func indexRule(index ruleIndex, keys map[string]struct{}, rule *indexedRule, add bool) {
-	for key := range keys {
-		if add {
-			if index[key] == nil {
-				index[key] = map[string]*indexedRule{}
-			}
-			index[key][rule.config.RuleTag] = rule
-		} else {
-			delete(index[key], rule.config.RuleTag)
-			if len(index[key]) == 0 {
-				delete(index, key)
-			}
-		}
-	}
-}
 func (r *Runtime) unindex(rule *indexedRule) {
-	indexRule(r.users, rule.user, rule, false)
-	indexRule(r.inbounds, rule.inbound, rule, false)
-	indexRule(r.outbounds, rule.outbound, rule, false)
 	rule.bucket.retired = true
+	r.retired = append(r.retired, rule.bucket)
 }
 func (r *Runtime) AddRules(rules []*Rule) error {
 	for _, rule := range rules {
@@ -283,10 +271,8 @@ func (r *Runtime) AddRules(rules []*Rule) error {
 		r.buckets[b] = struct{}{}
 		entry := &indexedRule{config: config, user: stringSet(rule.User), inbound: stringSet(rule.InboundTag), outbound: stringSet(rule.OutboundTag), bucket: b}
 		r.rules[rule.RuleTag] = entry
-		indexRule(r.users, entry.user, entry, true)
-		indexRule(r.inbounds, entry.inbound, entry, true)
-		indexRule(r.outbounds, entry.outbound, entry, true)
 	}
+	r.publishRulesLocked()
 	return nil
 }
 func (r *Runtime) RemoveRules(tags []string) error {
@@ -301,29 +287,20 @@ func (r *Runtime) RemoveRules(tags []string) error {
 			delete(r.rules, tag)
 		}
 	}
+	r.publishRulesLocked()
 	return nil
 }
 
 type RuleSummary struct{ RuleTag, Profile string }
 
 func (r *Runtime) ListRules(offset, limit uint32) ([]RuleSummary, uint32) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	tags := make([]string, 0, len(r.rules))
-	for tag := range r.rules {
-		tags = append(tags, tag)
-	}
-	sort.Strings(tags)
-	start := min(uint64(offset), uint64(len(tags)))
-	end := uint64(len(tags))
+	snapshot := r.snapshot.Load()
+	start := min(uint64(offset), uint64(len(snapshot.summaries)))
+	end := uint64(len(snapshot.summaries))
 	if limit > 0 {
 		end = min(end, start+uint64(limit))
 	}
-	result := make([]RuleSummary, 0, end-start)
-	for _, tag := range tags[start:end] {
-		result = append(result, RuleSummary{tag, r.rules[tag].config.Profile})
-	}
-	return result, uint32(len(tags))
+	return append([]RuleSummary(nil), snapshot.summaries[start:end]...), uint32(len(snapshot.summaries))
 }
 func conditionMatches(set map[string]struct{}, value string) bool {
 	if len(set) == 0 {
@@ -380,47 +357,43 @@ func (b *bucket) touch(ip string) {
 	b.mu.Unlock()
 }
 func (r *Runtime) Attach(ctx context.Context, info featurelimit.SessionInfo) (featurelimit.WrapReader, featurelimit.WrapWriter, func(), error) {
-	r.mu.RLock()
-	if r.closed {
-		r.mu.RUnlock()
-		return nil, nil, nil, errShaperClosed
-	}
-	candidates := map[string]*indexedRule{}
-	for _, index := range []map[string]*indexedRule{r.users[info.Email], r.inbounds[info.InboundTag], r.outbounds[info.OutboundTag]} {
-		for tag, rule := range index {
-			candidates[tag] = rule
+	var matches []*bucket
+	for {
+		snapshot := r.snapshot.Load()
+		if snapshot.closed {
+			return nil, nil, nil, errShaperClosed
 		}
-	}
-	matches := make([]*bucket, 0, len(candidates))
-	for _, rule := range candidates {
-		if rule.matches(info) {
-			matches = append(matches, rule.bucket)
+		matches = matchingBuckets(snapshot, info)
+		for _, bucket := range matches {
+			bucket.mu.Lock()
 		}
-	}
-	// 稳定顺序也让多桶准入不会因 map 顺序产生不同结果。
-	sort.Slice(matches, func(i, j int) bool { return matches[i].tag < matches[j].tag })
-	now := time.Now()
-	for _, b := range matches {
-		b.mu.Lock()
-	}
-	for _, b := range matches {
-		if err := b.checkAdmission(info.SourceIP, now); err != nil {
-			for _, locked := range matches {
-				locked.mu.Unlock()
+		if snapshot != r.snapshot.Load() {
+			for _, bucket := range matches {
+				bucket.mu.Unlock()
 			}
-			r.mu.RUnlock()
-			return nil, nil, nil, err
+			continue
 		}
-	}
-	for _, b := range matches {
-		if info.SourceIP != "" {
-			b.ips[info.SourceIP] = &sourceState{last: now}
+		now := time.Now()
+		for _, bucket := range matches {
+			if err := bucket.checkAdmission(info.SourceIP, now); err != nil {
+				for _, locked := range matches {
+					locked.mu.Unlock()
+				}
+				return nil, nil, nil, err
+			}
 		}
-		b.connections++
-		b.idleSince = time.Time{}
-		b.mu.Unlock()
+		for _, bucket := range matches {
+			if info.SourceIP != "" {
+				bucket.ips[info.SourceIP] = &sourceState{last: now}
+			}
+			bucket.connections++
+			bucket.idleSince = time.Time{}
+			r.activateLocked(bucket)
+			bucket.mu.Unlock()
+		}
+		break
 	}
-	r.mu.RUnlock()
+
 	if session.InboundFromContext(ctx) != nil {
 		// 节点利用率包含不命中规则的流量；直通会绕过计量，热开 NodeLimit 也无法看到旧连接。
 		// 未命中规则只计量，不创建速率桶、不排队；未加载模块仍保留上游直通。
@@ -440,11 +413,13 @@ func (r *Runtime) Attach(ctx context.Context, info featurelimit.SessionInfo) (fe
 		}
 		return participates
 	}
-	upPacer := &connectionPacer{flows: up, activity: activity, meter: &r.upBytes, participatingMeter: &r.participatingUp, datagram: info.Datagram}
-	downPacer := &connectionPacer{flows: down, activity: activity, meter: &r.downBytes, participatingMeter: &r.participatingDown, datagram: info.Datagram}
+	upPacer := newConnectionPacer(up, activity, &r.upBytes, &r.participatingUp, info.Datagram)
+	downPacer := newConnectionPacer(down, activity, &r.downBytes, &r.participatingDown, info.Datagram)
 	var once sync.Once
 	release := func() {
 		once.Do(func() {
+			upPacer.close()
+			downPacer.close()
 			for _, f := range up {
 				f.release()
 			}
@@ -456,6 +431,15 @@ func (r *Runtime) Attach(ctx context.Context, info featurelimit.SessionInfo) (fe
 			}
 		})
 	}
+	if !info.Datagram && len(matches) > 0 {
+		socket, err := newSocketPacer(ctx)
+		if err != nil {
+			release()
+			return nil, nil, nil, err
+		}
+		downPacer.socket = socket
+	}
+
 	return func(reader buf.Reader) buf.Reader { return newPacedReader(ctx, reader, upPacer) },
 		func(writer buf.Writer) buf.Writer { return newPacedWriter(ctx, writer, downPacer) }, release, nil
 }
@@ -467,12 +451,13 @@ type RuleStatus struct {
 }
 
 func (r *Runtime) GetRuleStatus(tag string) (RuleStatus, bool) {
-	r.mu.RLock()
-	rule := r.rules[tag]
-	r.mu.RUnlock()
-	if rule == nil {
+	snapshot := r.snapshot.Load()
+	position := sort.Search(len(snapshot.ordered), func(index int) bool { return snapshot.ordered[index].config.RuleTag >= tag })
+	if position == len(snapshot.ordered) || snapshot.ordered[position].config.RuleTag != tag {
 		return RuleStatus{}, false
 	}
+	rule := snapshot.ordered[position]
+
 	b := rule.bucket
 	b.mu.Lock()
 	b.expireIPs(time.Now())

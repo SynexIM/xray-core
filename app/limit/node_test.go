@@ -1,6 +1,8 @@
 package limit
 
 import (
+	"context"
+	featurelimit "github.com/xtls/xray-core/features/limit"
 	"testing"
 	"time"
 )
@@ -86,6 +88,12 @@ func TestProfileWithoutCongestedDoesNotParticipate(t *testing.T) {
 
 func TestCongestedAllocationReservesUnmanagedTraffic(t *testing.T) {
 	r := testRuntime(t, []*Profile{{Name: "p", Up: ladder(80_000_000), Congested: &Congested{Weight: 1}}}, []*Rule{{RuleTag: "r", Profile: "p", User: []string{"a"}}})
+	_, _, release, err := r.Attach(context.Background(), featurelimit.SessionInfo{Email: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
 	if err := r.SetNode(&NodeLimit{CapacityBps: 100_000_000, EnterPercent: 85, ExitPercent: 70}); err != nil {
 		t.Fatal(err)
 	}
