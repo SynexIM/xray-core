@@ -1,0 +1,35 @@
+{
+  "time": "2026-10-14T16:21:41Z",
+  "platform": "linux/arm64",
+  "go": "go1.27.1",
+  "cpus": 8,
+  "revision": "8e6f7f93829df9530e7f18986602a2903ebc73d4-harness",
+  "measurements": [
+    {
+      "name": "full_config_ready_1000000",
+      "unit": "s",
+      "value": 6.473377403
+    },
+    {
+      "name": "new_connections_1000000",
+      "unit": "connections/s",
+      "value": 10893.643804347343,
+      "note": "并发 2048；失败 0 "
+    },
+    {
+      "name": "new_connection_failures",
+      "unit": "count",
+      "value": 0
+    },
+    {
+      "name": "new_connections_node_cpu",
+      "unit": "% of 8C",
+      "value": 51.08449871506062
+    },
+    {
+      "name": "hong_kong_node",
+      "unit": "",
+      "error": "生产节点未授权变更；本轮只运行隔离容器"
+    }
+  ]
+}

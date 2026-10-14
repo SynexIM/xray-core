@@ -17,6 +17,7 @@ ip -n perf-client addr add 10.202.1.1/24 dev perf-cn
 source=101
 while [ "$source" -le 164 ]; do
     ip -n perf-client addr add "10.202.1.$source/24" dev perf-cn
+    ip -n perf-target addr add "10.202.2.$source/24" dev perf-tn
     source=$((source + 1))
 done
 ip -n perf-node addr add 10.202.1.2/24 dev perf-nc

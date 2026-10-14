@@ -1,5 +1,9 @@
 # 这个 fork 改了什么
 
+## 数据面第 2 轮：基准台归因（2026-10-15）
+
+建连基准新增两侧 CPU/mutex/block profile（基准专用 profiled 入口加载正式二进制相同模块，不改变正式进程的采样设置）。节点 CPU 94.23% 的样本落在系统调用，91.58% 累计在出口 `syscall.Connect`；客户端仅 0.12 核。原台只分散客户端来源，节点出口仍对同一目标 IP:端口建连。现在目标也分散到 64 个地址，避免出口 TIME_WAIT 四元组耗尽。原 60 秒 424.873/s、22213 EOF、93.40% CPU；同一份节点代码在修正台上 60 秒 10893.644/s、0 失败、51.08% CPU（含锁/阻塞采样）。吞吐仍未达 2 万/s。原始 profile 与前后报告见 `testing/realnode/perf/results/after-round2/`；数字变化是基准台修正，不能计作数据面优化。
+
 基线：**XTLS/Xray-core v26.10.10**。本分支 `synexim/v26.10.10` 由 `752042bc` 将旧 fork 差异三方移植到该 tag。module 保持 `github.com/xtls/xray-core`，调用方通过 `replace` 使用。发布使用 SynexIM 自有通道，保留上游 MPL-2.0 与版权声明；发布约束见 [RELEASE.md](RELEASE.md)。
 
 fork 改动集中在通用限速和运行时管理。本文记录当前差异；旧实现可在 Git 历史中查看，不保留并行兼容路径。

@@ -15,7 +15,9 @@ docker run --rm --privileged --network none -e XRAY_PERF_REVISION="$(git rev-par
 
 巡检为百万桶、两万已 Attach 身份、60 秒按 2ms × 20 个固定到达请求建连（开放到达，包括排队时间）；除 p99 也保留最大停顿。规则分页同时测十万和百万。路由增删与完整配置就绪只记录本轮数据，后续管理与 agent 交接仍需独立验收。完整配置就绪不是现有 agent 的逐条 gRPC 交接时间。
 
-新连接使用 64 个测试源地址，避免单地址 TIME_WAIT / 临时端口耗尽污染吞吐；并发 2048、统计开启、限速模块加载、百万 VLESS 配置。CPU 从实际节点进程 `/proc/PID/stat` 取值（Linux USER_HZ=100），按 8C 折算。iperf3 通过 SOCKS TCP 隧道，CPU/Gbps 只含节点进程，不含压测端、源站和转发隧道。
+新连接使用 64 个测试源地址和 64 个目标地址，避免客户端和节点出口的单地址 TIME_WAIT / 临时端口耗尽污染吞吐；并发默认 2048、统计开启、限速模块加载、百万 VLESS 配置。CPU 从实际节点进程 `/proc/PID/stat` 取值（Linux USER_HZ=100），按 8C 折算。iperf3 通过 SOCKS TCP 隧道，CPU/Gbps 只含节点进程，不含压测端、源站和转发隧道。
+
+两侧采样：编译 `./testing/realnode/perf/profiled` 为 `.perf-profiled-linux`，运行 `-mode network -source connections -xray /work/.perf-profiled-linux -profiles <目录>`。它加载正式 Xray 的同一组模块，仅基准进程开启 mutex/block 采样；客户端和节点各生成 CPU/mutex/block 三个 profile。`go tool pprof -top` 与 `-http=127.0.0.1:8080` 可查看要点和火焰图。采样吞吐与无采样最终基线分开记录。
 
 小包 64B、每次往返后等 20ms；满载与未限速分别运行。UDP 恒定码率为 1200B × 625 包/秒 × 60 秒，突发为 10ms 内 200 包，检查序号和到达间隔。仅报告端到端丢包；第 2 轮的分层丢包计数尚未实现。重传率取真实节点客户侧 TCP socket 的 `ss -tin` 字节重传/发送增量，热身 2 秒后测 60 秒。
 

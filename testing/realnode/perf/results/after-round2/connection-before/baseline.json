@@ -1,0 +1,35 @@
+{
+  "time": "2026-10-14T16:19:28Z",
+  "platform": "linux/arm64",
+  "go": "go1.27.1",
+  "cpus": 8,
+  "revision": "8e6f7f93829df9530e7f18986602a2903ebc73d4",
+  "measurements": [
+    {
+      "name": "full_config_ready_1000000",
+      "unit": "s",
+      "value": 6.906713108
+    },
+    {
+      "name": "new_connections_1000000",
+      "unit": "connections/s",
+      "value": 1395.9178771541528,
+      "note": "并发 2048；失败 4111 read tcp 10.202.1.106:43829-\u003e10.202.1.2:19002: i/o timeout"
+    },
+    {
+      "name": "new_connection_failures",
+      "unit": "count",
+      "value": 4111
+    },
+    {
+      "name": "new_connections_node_cpu",
+      "unit": "% of 8C",
+      "value": 64.14017447180153
+    },
+    {
+      "name": "hong_kong_node",
+      "unit": "",
+      "error": "生产节点未授权变更；本轮只运行隔离容器"
+    }
+  ]
+}

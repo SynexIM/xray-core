@@ -42,7 +42,7 @@ func serveTarget() error {
 			}
 		}
 	}()
-	listener, err := net.Listen("tcp", targetAddress)
+	listener, err := net.Listen("tcp", "0.0.0.0:19001")
 	if err != nil {
 		return err
 	}
@@ -417,6 +417,10 @@ func shallowNetwork(reference bool) error {
 }
 
 func connectionBenchmark(options options) ([]measurement, error) {
+	stopProfiles, err := startClientProfiles(options.profiles)
+	if err != nil {
+		return nil, err
+	}
 	var count, failures atomic.Uint64
 	var firstError string
 	var errorLock sync.Mutex
@@ -432,7 +436,8 @@ func connectionBenchmark(options options) ([]measurement, error) {
 			request[18] = 1
 			binary.BigEndian.PutUint16(request[19:21], 19001)
 			request[21] = 1
-			copy(request[22:26], []byte{10, 202, 2, 2})
+			// 节点出口也需要多个目的地址；只增加客户端源地址仍会耗尽出口四元组。
+			copy(request[22:26], []byte{10, 202, 2, byte(101 + worker%64)})
 			request[26] = 'E'
 			for time.Now().Before(deadline) {
 				id := identity(int(count.Load()+uint64(worker)) % 1000000)
@@ -464,6 +469,9 @@ func connectionBenchmark(options options) ([]measurement, error) {
 		}(worker)
 	}
 	wait.Wait()
+	if err := stopProfiles(); err != nil {
+		return nil, err
+	}
 	row := scalar("new_connections_1000000", "connections/s", float64(count.Load())/time.Since(start).Seconds())
 	row.Note = fmt.Sprintf("并发 %d；失败 %d %s", options.concurrency, failures.Load(), firstError)
 	return []measurement{row, scalar("new_connection_failures", "count", float64(failures.Load()))}, nil
@@ -567,7 +575,7 @@ func networkBenchmark(options options) ([]measurement, error) {
 		scenarios = []string{options.source}
 	}
 	for _, scenario := range scenarios {
-		config := map[string]any{"log": map[string]any{"loglevel": "none"}, "stats": map[string]any{}, "policy": map[string]any{"levels": map[string]any{"0": map[string]any{"statsUserUplink": true, "statsUserDownlink": true, "statsUserOnline": true}}}, "inbounds": []map[string]any{{"tag": "entry", "listen": "10.202.1.2", "port": 19000, "protocol": "socks", "settings": map[string]any{"auth": "password", "udp": true, "accounts": []map[string]any{{"user": "u1", "pass": "local-test-password", "email": "u1"}}}}}, "outbounds": []map[string]any{{"tag": "direct", "protocol": "freedom", "settings": map[string]any{"finalRules": []map[string]any{{"action": "allow", "ip": []string{"10.202.2.2/32"}, "port": "19001,5201"}}}}}}
+		config := map[string]any{"log": map[string]any{"loglevel": "none"}, "stats": map[string]any{}, "policy": map[string]any{"levels": map[string]any{"0": map[string]any{"statsUserUplink": true, "statsUserDownlink": true, "statsUserOnline": true}}}, "inbounds": []map[string]any{{"tag": "entry", "listen": "10.202.1.2", "port": 19000, "protocol": "socks", "settings": map[string]any{"auth": "password", "udp": true, "accounts": []map[string]any{{"user": "u1", "pass": "local-test-password", "email": "u1"}}}}}, "outbounds": []map[string]any{{"tag": "direct", "protocol": "freedom", "settings": map[string]any{"finalRules": []map[string]any{{"action": "allow", "ip": []string{"10.202.2.0/24"}, "port": "19001,5201"}}}}}}
 		rate := uint64(0)
 		switch scenario {
 		case "loaded_ping":
@@ -599,6 +607,9 @@ func networkBenchmark(options options) ([]measurement, error) {
 			config["inbounds"] = append(config["inbounds"].([]map[string]any), map[string]any{"tag": "vless-entry", "listen": "10.202.1.2", "port": 19002, "protocol": "vless", "settings": map[string]any{"decryption": "none", "clients": accounts}})
 		}
 		fmt.Fprintln(os.Stderr, "网络场景", scenario)
+		if options.profiles != "" {
+			config["metrics"] = map[string]any{"listen": "127.0.0.1:19090"}
+		}
 		start := time.Now()
 		inbounds := config["inbounds"].([]map[string]any)
 		inbounds[0]["listen"] = "0.0.0.0"
@@ -616,9 +627,26 @@ func networkBenchmark(options options) ([]measurement, error) {
 		}
 		measureStart := time.Now()
 		command := exec.CommandContext(ctx, "ip", "netns", "exec", "perf-client", os.Args[0], "-mode", "client", "-source", scenario, "-seconds", strconv.Itoa(options.seconds))
+		command.Args = append(command.Args, "-concurrency", strconv.Itoa(options.concurrency))
+		var collector *exec.Cmd
+		if options.profiles != "" && scenario == "connections" {
+			command.Args = append(command.Args, "-profiles", options.profiles)
+			collector = exec.CommandContext(ctx, "ip", "netns", "exec", "perf-node", os.Args[0], "-mode", "profile", "-seconds", strconv.Itoa(options.seconds), "-profiles", options.profiles)
+			collector.Stderr = os.Stderr
+			if err := collector.Start(); err != nil {
+				node.Stop()
+				return nil, err
+			}
+		}
 		command.Stderr = os.Stderr
 		output, clientError := command.Output()
 		after, cpuError := cpuSeconds(node.Command.Process.Pid)
+		if collector != nil {
+			if err := collector.Wait(); err != nil {
+				node.Stop()
+				return nil, err
+			}
+		}
 		node.Stop()
 		if clientError != nil {
 			rows = append(rows, measurement{Name: scenario, Error: clientError.Error()})

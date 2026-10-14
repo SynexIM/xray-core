@@ -36,8 +36,8 @@ type report struct {
 	Measurements []measurement `json:"measurements"`
 }
 type options struct {
-	mode, output, binary, source string
-	seconds, users, concurrency  int
+	mode, output, binary, source, profiles string
+	seconds, users, concurrency            int
 }
 
 func number(value float64) *float64 { return &value }
@@ -120,6 +120,8 @@ func run(options options) ([]measurement, error) {
 		return networkBenchmark(options)
 	case "client":
 		return clientBenchmark(options)
+	case "profile":
+		return nil, collectNodeProfiles(options)
 	case "target":
 		return nil, serveTarget()
 	case "all":
@@ -162,6 +164,7 @@ func main() {
 	flag.StringVar(&options.output, "output", "", "结果目录；省略时输出 JSON")
 	flag.StringVar(&options.binary, "xray", "/work/.perf-xray-linux", "真实 Xray")
 	flag.StringVar(&options.source, "source", "", "客户端子场景")
+	flag.StringVar(&options.profiles, "profiles", "", "建连两侧 profile 目录；节点使用 profiled 二进制")
 	flag.IntVar(&options.seconds, "seconds", 60, "测量秒数")
 	flag.IntVar(&options.users, "users", 1000000, "内存装载人数")
 	flag.IntVar(&options.concurrency, "concurrency", 2048, "新建连接并发")
