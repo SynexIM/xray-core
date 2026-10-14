@@ -1,0 +1,277 @@
+{
+  "time": "2026-10-14T13:47:55Z",
+  "platform": "linux/arm64",
+  "go": "go1.27.1",
+  "cpus": 8,
+  "revision": "4bdd199e",
+  "measurements": [
+    {
+      "name": "vmess_uniform_20000",
+      "unit": "µs",
+      "p50": 3282.421,
+      "p99": 9060.793,
+      "max": 12617.968,
+      "samples": 1000
+    },
+    {
+      "name": "vmess_recent_20000",
+      "unit": "µs",
+      "p50": 2752.538,
+      "p99": 8116.78,
+      "max": 17089.321,
+      "samples": 1000
+    },
+    {
+      "name": "vmess_source_cache_20000",
+      "unit": "µs",
+      "p50": 2564.077,
+      "p99": 7323.186,
+      "max": 7756.775,
+      "samples": 1000
+    },
+    {
+      "name": "vless_1000000",
+      "unit": "µs",
+      "p50": 0.834,
+      "p99": 2.042,
+      "max": 33.709,
+      "samples": 20000
+    },
+    {
+      "name": "heap_per_identity_100000",
+      "unit": "B",
+      "value": 756.40152
+    },
+    {
+      "name": "rss_per_identity_100000",
+      "unit": "B",
+      "value": 909.06624
+    },
+    {
+      "name": "heap_after_delete_100000",
+      "unit": "B",
+      "value": 47226008
+    },
+    {
+      "name": "rss_after_delete_100000",
+      "unit": "B",
+      "value": 125448192
+    },
+    {
+      "name": "counters_after_delete_100000",
+      "unit": "count",
+      "value": 200000
+    },
+    {
+      "name": "heap_per_identity_1000000",
+      "unit": "B",
+      "value": 824.839912
+    },
+    {
+      "name": "rss_per_identity_1000000",
+      "unit": "B",
+      "value": 1007.898624
+    },
+    {
+      "name": "heap_after_delete_1000000",
+      "unit": "B",
+      "value": 540734600
+    },
+    {
+      "name": "rss_after_delete_1000000",
+      "unit": "B",
+      "value": 1207611392
+    },
+    {
+      "name": "counters_after_delete_1000000",
+      "unit": "count",
+      "value": 2000000
+    },
+    {
+      "name": "route_add_100000",
+      "unit": "ms",
+      "p50": 11.459035,
+      "p99": 21.482883,
+      "max": 21.482883,
+      "samples": 100
+    },
+    {
+      "name": "route_remove_100000",
+      "unit": "ms",
+      "p50": 9.809345,
+      "p99": 20.116239,
+      "max": 20.116239,
+      "samples": 100
+    },
+    {
+      "name": "attach_during_tick_1000000_20000_active",
+      "unit": "ms",
+      "p50": 0.037792,
+      "p99": 76.304305,
+      "max": 97.639698,
+      "samples": 432600
+    },
+    {
+      "name": "limit_page_1000000",
+      "unit": "ms",
+      "p50": 172.217343,
+      "p99": 437.090781,
+      "max": 437.090781,
+      "samples": 100,
+      "note": "百万规则（比目标十万更大）；一页 50 条"
+    },
+    {
+      "name": "limit_page_100000",
+      "unit": "ms",
+      "p50": 12.745728,
+      "p99": 30.352526,
+      "max": 30.352526,
+      "samples": 100
+    },
+    {
+      "name": "full_config_ready_1000000",
+      "unit": "s",
+      "value": 6.457408626
+    },
+    {
+      "name": "new_connections_1000000",
+      "unit": "connections/s",
+      "value": 426.3132447031189,
+      "note": "并发 2048；失败 22528 unexpected EOF"
+    },
+    {
+      "name": "new_connection_failures",
+      "unit": "count",
+      "value": 22528
+    },
+    {
+      "name": "new_connections_node_cpu",
+      "unit": "% of 8C",
+      "value": 93.38284778152448
+    },
+    {
+      "name": "small_packet_unlimited",
+      "unit": "ms",
+      "p50": 34.908908,
+      "p99": 49.300766,
+      "max": 65.017431,
+      "samples": 1028
+    },
+    {
+      "name": "small_packet_loaded_2mbps",
+      "unit": "ms",
+      "p50": 33.903941,
+      "p99": 51.094956,
+      "max": 61.845527,
+      "samples": 1037
+    },
+    {
+      "name": "udp_constant_6mbps_sent",
+      "unit": "packets",
+      "value": 37500
+    },
+    {
+      "name": "udp_constant_6mbps_lost",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_constant_6mbps_send_duration",
+      "unit": "ms",
+      "value": 59998.455504
+    },
+    {
+      "name": "udp_constant_6mbps_jitter",
+      "unit": "ms",
+      "p50": 1.598291,
+      "p99": 13.293365,
+      "max": 124.621331,
+      "samples": 37499
+    },
+    {
+      "name": "udp_burst_200_sent",
+      "unit": "packets",
+      "value": 200
+    },
+    {
+      "name": "udp_burst_200_lost",
+      "unit": "packets",
+      "value": 0
+    },
+    {
+      "name": "udp_burst_200_send_duration",
+      "unit": "ms",
+      "value": 10.922237
+    },
+    {
+      "name": "udp_burst_200_jitter",
+      "unit": "ms",
+      "p50": 0.0425,
+      "p99": 2.761737,
+      "max": 5.339472,
+      "samples": 199
+    },
+    {
+      "name": "iperf_proxy_throughput",
+      "unit": "Gbps",
+      "value": 0.5811556311173993
+    },
+    {
+      "name": "cpu_per_gbps",
+      "unit": "cores/Gbps",
+      "value": 0.3544545096627129
+    },
+    {
+      "name": "web_single",
+      "unit": "ms",
+      "p50": 106.449214,
+      "p99": 131.750057,
+      "max": 160.918813,
+      "samples": 461
+    },
+    {
+      "name": "web_300_downloads_20mbps",
+      "unit": "ms",
+      "p50": 103.285229,
+      "p99": 118.420301,
+      "max": 123.713148,
+      "samples": 476
+    },
+    {
+      "name": "download_300_aggregate",
+      "unit": "Mbps",
+      "value": 19.995173592297757
+    },
+    {
+      "name": "shallow_throughput",
+      "unit": "Mbps",
+      "p50": 16.559059921949327,
+      "p99": 18.200459512721782,
+      "max": 18.200459512721782,
+      "samples": 60
+    },
+    {
+      "name": "shallow_retransmission",
+      "unit": "%",
+      "value": 0.07686126541592425
+    },
+    {
+      "name": "tc_reference_throughput",
+      "unit": "Mbps",
+      "p50": 7.3399232139671025,
+      "p99": 11.836351902765337,
+      "max": 11.836351902765337,
+      "samples": 60
+    },
+    {
+      "name": "tc_reference_retransmission",
+      "unit": "%",
+      "value": 0
+    },
+    {
+      "name": "hong_kong_node",
+      "unit": "",
+      "error": "生产节点未授权变更；本轮只运行隔离容器"
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+[{"name":"vmess_uniform_20000","unit":"µs","p50":3282.421,"p99":9060.793,"max":12617.968,"samples":1000},{"name":"vmess_recent_20000","unit":"µs","p50":2752.538,"p99":8116.78,"max":17089.321,"samples":1000},{"name":"vmess_source_cache_20000","unit":"µs","p50":2564.077,"p99":7323.186,"max":7756.775,"samples":1000},{"name":"vless_1000000","unit":"µs","p50":0.834,"p99":2.042,"max":33.709,"samples":20000}]
+

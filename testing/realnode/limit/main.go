@@ -28,6 +28,7 @@ import (
 
 	handlercommand "github.com/xtls/xray-core/app/proxyman/command"
 	statscommand "github.com/xtls/xray-core/app/stats/command"
+	"github.com/xtls/xray-core/testing/realnode/internal/runner"
 	xproxy "golang.org/x/net/proxy"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -60,76 +61,10 @@ type infiniteReader struct{}
 
 func (infiniteReader) Read(p []byte) (int, error) { clear(p); return len(p), nil }
 
-type child struct {
-	cmd  *exec.Cmd
-	done chan error
-	log  string
+func startXray(ctx context.Context, binary, dir, name string, config any, readyAddress string) (*runner.Child, error) {
+	return runner.Start(ctx, binary, dir, name, config, readyAddress, 8*time.Second)
 }
-
-func startXray(ctx context.Context, binary, dir, name string, config any, readyAddress string) (*child, error) {
-	data, err := json.Marshal(config)
-	if err != nil {
-		return nil, err
-	}
-	configPath := filepath.Join(dir, name+".json")
-	if err = os.WriteFile(configPath, data, 0600); err != nil {
-		return nil, err
-	}
-	logPath := filepath.Join(dir, name+".log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY, 0600)
-	if err != nil {
-		return nil, err
-	}
-	cmd := exec.CommandContext(ctx, binary, "run", "-c", configPath)
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	if err = cmd.Start(); err != nil {
-		logFile.Close()
-		return nil, err
-	}
-	c := &child{cmd: cmd, done: make(chan error, 1), log: logPath}
-	go func() { err := cmd.Wait(); logFile.Close(); c.done <- err }()
-	deadline := time.Now().Add(8 * time.Second)
-	for time.Now().Before(deadline) {
-		select {
-		case err := <-c.done:
-			logs, _ := os.ReadFile(logPath)
-			return nil, fmt.Errorf("%s 启动失败: %w\n%s", name, err, logs)
-		default:
-		}
-		conn, err := net.DialTimeout("tcp", readyAddress, 100*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			return c, nil
-		}
-		select {
-		case <-ctx.Done():
-			c.stop()
-			return nil, ctx.Err()
-		case <-time.After(20 * time.Millisecond):
-		}
-	}
-	c.stop()
-	logs, _ := os.ReadFile(logPath)
-	return nil, fmt.Errorf("%s 未就绪\n%s", name, logs)
-}
-func (c *child) stop() {
-	c.cmd.Process.Signal(os.Interrupt)
-	select {
-	case <-c.done:
-	case <-time.After(2 * time.Second):
-		c.cmd.Process.Kill()
-		<-c.done
-	}
-}
-func freePort() (int, error) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, err
-	}
-	defer listener.Close()
-	return listener.Addr().(*net.TCPAddr).Port, nil
-}
+func freePort() (int, error) { return runner.FreePort() }
 func steps(rates ...uint64) []map[string]any {
 	result := make([]map[string]any, 0, len(rates))
 	for i, r := range rates {
@@ -617,13 +552,13 @@ func run(o options) error {
 	if err != nil {
 		return err
 	}
-	defer server.stop()
+	defer server.Stop()
 	if clientConfig != nil {
 		client, err := startXray(rootCtx, binary, dir, "client", clientConfig, socksAddress)
 		if err != nil {
 			return err
 		}
-		defer client.stop()
+		defer client.Stop()
 	}
 	measureCtx, measureCancel := context.WithCancel(rootCtx)
 	defer measureCancel()
@@ -655,7 +590,7 @@ func run(o options) error {
 	}
 	defer func() { measureCancel(); wg.Wait() }()
 	if err = waitReady(measureCtx, streams, errs); err != nil {
-		logs, _ := os.ReadFile(server.log)
+		logs, _ := os.ReadFile(server.Log)
 		clientLogs, _ := os.ReadFile(filepath.Join(dir, "client.log"))
 		return fmt.Errorf("真实代理流启动失败: %w\nserver:\n%s\nclient:\n%s", err, logs, clientLogs)
 	}
@@ -704,7 +639,7 @@ func run(o options) error {
 	measureCancel()
 	wg.Wait()
 	if err != nil {
-		logs, _ := os.ReadFile(server.log)
+		logs, _ := os.ReadFile(server.Log)
 		return fmt.Errorf("真实流测量失败: %w\n%s", err, logs)
 	}
 	if !o.unlimited {

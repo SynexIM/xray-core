@@ -109,3 +109,11 @@ go test -race ./app/limit/... ./app/dispatcher/... ./app/proxyman/... ./infra/co
 
 上游 router command 的超时 cancel 告警、协议 unsafe.Pointer 等指定 vet 告警保持原状。geoip/geosite 及部分网络测试需要外部资源，不能只凭构建声称通过。
 - `app/proxyman/inbound`：补齐 `Manager.DrainHandler` / `ResumeHandler` 与 AlwaysOn / worker 的排空实现（rebase 时漏移植，从 20bc7afb 找回）。`DrainInbound` 只关监听口、已建立会话继续；gRPC / H3 等关监听会断流的传输拒绝排空。ProxyAstra agent 新旧交接依赖它。
+
+## 数据面性能基准（2026-10-14，第 1 轮）
+
+`testing/realnode/perf` 使用现有 validator、配置入口、SOCKS 与 realnode 启动工具，没有新增 Go 依赖。`limit/main.go` 的启动器迁到 `testing/realnode/internal/runner`；真实核心二进制在改前测量期间保持 `4bdd199e`。结果、命令、环境与限制见工具 README 和 `results/before/baseline.{json,md}`。
+
+OrbStack Linux/arm64、Go 1.27.1、8C，client/node/target 命名空间与透明瓶颈桥隔离运行；模拟 30ms RTT、1Gbps 链路和 21Mbps/20 包浅缓冲。VMess 2 万身份随机/最近/来源场景 p99 为 9060.793/8116.780/7323.186µs；VLESS 百万身份 2.042µs。百万桶两万活跃的固定到达 Attach p99 为 76.304305ms，十万规则一页 p99 为 30.352526ms。百万身份 heap 增量 824.840B/身份，删除后仍有 200 万计数器。
+
+这些是改前数据，尚未声称达标：2048 并发新连接 426.313/s、22528 次 EOF；恒定码率 UDP 无丢包、抖动 p99 13.293365ms。tc 参照实际中位吞吐只有 7.340Mbps，不能当成 20Mbps 的同速对照；尝试独立桥与 fq 后仍未达标，保留实测并列为验收限制。香港生产节点未连接，真实专线按施工单暂缓。完整配置就绪不等于 agent 的逐条 gRPC 交接时间。

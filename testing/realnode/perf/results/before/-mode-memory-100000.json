@@ -1,0 +1,2 @@
+[{"name":"heap_per_identity_100000","unit":"B","value":756.40152},{"name":"rss_per_identity_100000","unit":"B","value":909.06624},{"name":"heap_after_delete_100000","unit":"B","value":47226008},{"name":"rss_after_delete_100000","unit":"B","value":125448192},{"name":"counters_after_delete_100000","unit":"count","value":200000}]
+
