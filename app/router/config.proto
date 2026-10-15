@@ -59,6 +59,10 @@ message RoutingRule {
 
   // List of operating systems for matching the one Xray itself is running on.
   repeated string local_os = 23;
+
+  // Larger priorities match first; equal priorities keep insertion order.
+  // Not a matching condition: rules differing only here stay indexable.
+  int32 priority = 24;
 }
 
 message WebhookConfig {

@@ -17,7 +17,7 @@ func TestBatchRouteOrderAndAtomicFailure(t *testing.T) {
 	if err := r.ReplaceRule(serial.ToTypedMessage(config)); err != nil {
 		t.Fatal(err)
 	}
-	got := r.rules.Load().all
+	got := r.rules.Load().allRules()
 	for i, tag := range []string{"first", "middle", "last", "added"} {
 		if got[i].RuleTag != tag {
 			t.Fatalf("position %d: %s", i, got[i].RuleTag)
@@ -35,7 +35,7 @@ func TestBatchRouteOrderAndAtomicFailure(t *testing.T) {
 	if errs[0] != nil || errs[1] == nil || errs[2] != nil || errs[3] != nil {
 		t.Fatalf("results: %v", errs)
 	}
-	got = r.rules.Load().all
+	got = r.rules.Load().allRules()
 	if len(got) != 2 || got[0].RuleTag != "middle" || got[1].RuleTag != "added" {
 		t.Fatal("delete changed survivor order")
 	}

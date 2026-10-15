@@ -53,7 +53,7 @@ func (r *Router) RemoveBalancers(tags []string) error {
 		if b == nil {
 			continue
 		}
-		for _, rule := range r.rules.Load().all {
+		for _, rule := range r.rules.Load().allRules() {
 			if rule.Balancer == b {
 				return errors.New("balancer ", tag, " is still used by rule ", rule.RuleTag)
 			}
@@ -70,7 +70,7 @@ func (r *Router) rebind(replaced map[*Balancer]*Balancer) {
 	if len(replaced) == 0 {
 		return
 	}
-	old := r.rules.Load().all
+	old := r.rules.Load().allRules()
 	rules := make([]*Rule, len(old))
 	for i, rule := range old {
 		if b := replaced[rule.Balancer]; b != nil {

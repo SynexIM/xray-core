@@ -104,16 +104,11 @@ func (r *Router) AddRules(configs []*serial.TypedMessage, shouldAppend bool) []e
 
 	old := r.rules.Load()
 	oldBalancers := *r.balancers.Load()
-	var rules []*Rule
+	next := newRuleSet(nil)
 	balancers := make(map[string]*Balancer, len(oldBalancers))
-	existTags := make(map[string]bool, len(old.all))
 	if shouldAppend {
-		rules = make([]*Rule, len(old.all), len(old.all)+len(configs))
-		copy(rules, old.all)
+		next = old.clone()
 		maps.Copy(balancers, oldBalancers)
-		for _, rule := range old.all {
-			existTags[rule.RuleTag] = true
-		}
 	}
 	for i, msg := range configs {
 		inst, err := msg.GetInstance()
@@ -126,21 +121,18 @@ func (r *Router) AddRules(configs []*serial.TypedMessage, shouldAppend bool) []e
 			errs[i] = errors.New("AddRule: config type error")
 			continue
 		}
-		added, addedBalancers, err := r.buildConfig(c, balancers, existTags)
+		added, addedBalancers, err := r.buildConfig(c, balancers, next.hasTag)
 		if err != nil {
 			errs[i] = err
 			continue
 		}
-		for _, rule := range added {
-			existTags[rule.RuleTag] = true
-		}
-		rules = append(rules, added...)
+		next.append(added)
 		maps.Copy(balancers, addedBalancers)
 	}
 	r.balancers.Store(&balancers)
-	r.rules.Store(newRuleSet(rules))
+	r.rules.Store(next)
 	if !shouldAppend {
-		closeWebhooks(old.all)
+		closeWebhooks(old.allRules())
 	}
 	return errs
 }
@@ -152,36 +144,31 @@ func (r *Router) ReloadRules(config *Config, shouldAppend bool) error {
 	old := r.rules.Load()
 	oldBalancers := *r.balancers.Load()
 
-	var newRules []*Rule
+	next := newRuleSet(nil)
 	newBalancers := make(map[string]*Balancer)
-	existTags := make(map[string]bool, len(old.all)+len(config.Rule))
 	if shouldAppend {
-		newRules = make([]*Rule, len(old.all), len(old.all)+len(config.Rule))
-		copy(newRules, old.all)
+		next = old.clone()
 		maps.Copy(newBalancers, oldBalancers)
-		for _, rule := range old.all {
-			existTags[rule.RuleTag] = true
-		}
 	}
 
-	added, addedBalancers, err := r.buildConfig(config, newBalancers, existTags)
+	added, addedBalancers, err := r.buildConfig(config, newBalancers, next.hasTag)
 	if err != nil {
 		return err
 	}
 	maps.Copy(newBalancers, addedBalancers)
-	newRules = append(newRules, added...)
+	next.append(added)
 
 	r.balancers.Store(&newBalancers)
-	r.rules.Store(newRuleSet(newRules))
+	r.rules.Store(next)
 	if !shouldAppend {
-		closeWebhooks(old.all)
+		closeWebhooks(old.allRules())
 	}
 	return nil
 }
 
 // buildConfig turns one Config into rules and balancers without mutating the
 // given balancer / tag state, so a failing config leaves nothing behind.
-func (r *Router) buildConfig(config *Config, balancers map[string]*Balancer, existTags map[string]bool) ([]*Rule, map[string]*Balancer, error) {
+func (r *Router) buildConfig(config *Config, balancers map[string]*Balancer, tagExists func(string) bool) ([]*Rule, map[string]*Balancer, error) {
 	added := make(map[string]*Balancer)
 	for _, rule := range config.BalancingRule {
 		if _, found := balancers[rule.Tag]; found {
@@ -218,7 +205,7 @@ func (r *Router) buildConfig(config *Config, balancers map[string]*Balancer, exi
 			userKeys:     pureUserKeys(rule),
 			nativeConfig: proto.Clone(rule).(*RoutingRule),
 		}
-		if rr.RuleTag != "" && (existTags[rr.RuleTag] || seen[rr.RuleTag]) {
+		if rr.RuleTag != "" && (tagExists(rr.RuleTag) || seen[rr.RuleTag]) {
 			return fail(errors.New("duplicate ruleTag ", rr.RuleTag))
 		}
 		seen[rr.RuleTag] = true
@@ -265,18 +252,15 @@ func (r *Router) RemoveRules(tags []string) []error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	oldRules := r.rules.Load().all
-	newRules := make([]*Rule, 0, len(oldRules))
+	next := r.rules.Load().clone()
 	var removed []*Rule
-	for _, rule := range oldRules {
-		if !wanted[rule.RuleTag] {
-			newRules = append(newRules, rule)
-		} else {
+	for tag := range wanted {
+		if rule := next.remove(tag); rule != nil {
 			removed = append(removed, rule)
 		}
 	}
 	if len(removed) > 0 {
-		r.rules.Store(newRuleSet(newRules))
+		r.rules.Store(next)
 		closeWebhooks(removed)
 	}
 	return errs
@@ -284,7 +268,7 @@ func (r *Router) RemoveRules(tags []string) []error {
 
 // ListRule implements routing.Router
 func (r *Router) ListRule() []routing.Route {
-	rules := r.rules.Load().all
+	rules := r.rules.Load().allRules()
 	ruleList := make([]routing.Route, 0, len(rules))
 	for _, rule := range rules {
 		ruleList = append(ruleList, &Route{
@@ -316,14 +300,14 @@ func (r *Router) ReplaceRule(message *serial.TypedMessage) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	old := r.rules.Load().all
+	old := r.rules.Load().allRules()
 	existing := make(map[string]bool, len(old))
 	for _, rule := range old {
 		if !tags[rule.RuleTag] {
 			existing[rule.RuleTag] = true
 		}
 	}
-	added, _, err := r.buildConfig(config, *r.balancers.Load(), existing)
+	added, _, err := r.buildConfig(config, *r.balancers.Load(), func(tag string) bool { return existing[tag] })
 	if err != nil {
 		return err
 	}
@@ -354,7 +338,7 @@ func (r *Router) ReplaceRule(message *serial.TypedMessage) error {
 
 func (r *Router) RuleConfigByTag() map[string][]byte {
 	result := make(map[string][]byte)
-	for _, rule := range r.rules.Load().all {
+	for _, rule := range r.rules.Load().allRules() {
 		if rule.nativeConfig == nil {
 			continue
 		}
@@ -424,7 +408,7 @@ func (r *Router) Close() error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	closeWebhooks(r.rules.Load().all)
+	closeWebhooks(r.rules.Load().allRules())
 	return nil
 }
 
