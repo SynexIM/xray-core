@@ -10,16 +10,20 @@ import (
 	"github.com/xtls/xray-core/features/routing"
 )
 
-// rulePosition orders rules: larger priority first, then insertion order.
-// rank is the negated priority so that ascending order is matching order.
+// rulePosition orders rules by descending priority, then stable key, then insertion order.
+// Empty keys retain the native insertion-order behavior.
 type rulePosition struct {
 	rank int64
+	key  string
 	seq  uint64
 }
 
 func (p rulePosition) less(q rulePosition) bool {
 	if p.rank != q.rank {
 		return p.rank < q.rank
+	}
+	if p.key != q.key {
+		return p.key < q.key
 	}
 	return p.seq < q.seq
 }
@@ -84,19 +88,23 @@ func (set *ruleSet) clone() *ruleSet {
 
 func (set *ruleSet) append(rules []*Rule) {
 	for _, rule := range rules {
-		position := rulePosition{rank: -int64(rule.nativeConfig.GetPriority()), seq: set.nextPosition}
+		set.insert(rule, set.nextPosition)
 		set.nextPosition++
-		entry := orderedRule{position: position, rule: rule}
-		set.ordered.ReplaceOrInsert(entry)
-		if rule.RuleTag != "" {
-			set.byTag.ReplaceOrInsert(taggedRule{tag: rule.RuleTag, position: position, rule: rule})
-		}
-		if len(rule.userKeys) == 0 {
-			set.others.ReplaceOrInsert(entry)
-		}
-		for _, email := range rule.userKeys {
-			set.byUser.ReplaceOrInsert(userRuleEntry{email: email, position: position, rule: rule})
-		}
+	}
+}
+
+func (set *ruleSet) insert(rule *Rule, seq uint64) {
+	position := rulePosition{rank: -int64(rule.nativeConfig.GetPriority()), key: rule.nativeConfig.GetOrderKey(), seq: seq}
+	entry := orderedRule{position: position, rule: rule}
+	set.ordered.ReplaceOrInsert(entry)
+	if rule.RuleTag != "" {
+		set.byTag.ReplaceOrInsert(taggedRule{tag: rule.RuleTag, position: position, rule: rule})
+	}
+	if len(rule.userKeys) == 0 {
+		set.others.ReplaceOrInsert(entry)
+	}
+	for _, email := range rule.userKeys {
+		set.byUser.ReplaceOrInsert(userRuleEntry{email: email, position: position, rule: rule})
 	}
 }
 
@@ -156,7 +164,7 @@ func (set *ruleSet) pick(ctx routing.Context) *Rule {
 // condition added to the proto later is safe by default.
 var ruleConditionFree = map[string]bool{
 	"user_email": true, "rule_tag": true, "webhook": true,
-	"tag": true, "balancing_tag": true, "priority": true,
+	"tag": true, "balancing_tag": true, "priority": true, "order_key": true,
 }
 
 // pureUserKeys returns the literal emails of a rule that matches on user email

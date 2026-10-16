@@ -257,11 +257,16 @@ func (r *Runtime) AddRules(rules []*Rule) error {
 			return invalid("rules."+rule.RuleTag+".profile", "引用的 profile 不存在: "+rule.Profile)
 		}
 	}
+	changed := false
 	for _, rule := range rules {
+		if old := r.rules[rule.RuleTag]; old != nil && proto.Equal(old.config, rule) {
+			continue // 幂等重试不能洗掉已消耗的阶梯额度、连接数与来源数。
+		}
 		config := proto.Clone(rule).(*Rule)
 		if old := r.rules[rule.RuleTag]; old != nil {
 			r.unindex(old)
 		}
+		changed = true
 		state := r.profiles[rule.Profile]
 		profile := state.current.Load()
 		b := &bucket{tag: rule.RuleTag, profile: state, up: newShaper(), down: newShaper(), ips: map[string]*sourceState{}, idleSince: time.Now()}
@@ -272,7 +277,9 @@ func (r *Runtime) AddRules(rules []*Rule) error {
 		entry := &indexedRule{config: config, user: stringSet(rule.User), inbound: stringSet(rule.InboundTag), outbound: stringSet(rule.OutboundTag), bucket: b}
 		r.rules[rule.RuleTag] = entry
 	}
-	r.publishRulesLocked()
+	if changed || r.snapshot.Load() == nil {
+		r.publishRulesLocked()
+	}
 	return nil
 }
 func (r *Runtime) RemoveRules(tags []string) error {

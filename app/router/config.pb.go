@@ -111,7 +111,10 @@ type RoutingRule struct {
 	LocalOs []string `protobuf:"bytes,23,rep,name=local_os,json=localOs,proto3" json:"local_os,omitempty"`
 	// Larger priorities match first; equal priorities keep insertion order.
 	// Not a matching condition: rules differing only here stay indexable.
-	Priority      int32 `protobuf:"varint,24,opt,name=priority,proto3" json:"priority,omitempty"`
+	Priority int32 `protobuf:"varint,24,opt,name=priority,proto3" json:"priority,omitempty"`
+	// Optional stable ordering within a priority (e.g. creation time + resource name).
+	// Empty keys retain insertion order. Not a matching condition.
+	OrderKey      string `protobuf:"bytes,25,opt,name=order_key,json=orderKey,proto3" json:"order_key,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -295,6 +298,13 @@ func (x *RoutingRule) GetPriority() int32 {
 		return x.Priority
 	}
 	return 0
+}
+
+func (x *RoutingRule) GetOrderKey() string {
+	if x != nil {
+		return x.OrderKey
+	}
+	return ""
 }
 
 type isRoutingRule_TargetTag interface {
@@ -665,7 +675,7 @@ var File_app_router_config_proto protoreflect.FileDescriptor
 
 const file_app_router_config_proto_rawDesc = "" +
 	"\n" +
-	"\x17app/router/config.proto\x12\x0fxray.app.router\x1a!common/serial/typed_message.proto\x1a\x15common/net/port.proto\x1a\x18common/net/network.proto\x1a\x1bcommon/geodata/geodat.proto\"\xf8\a\n" +
+	"\x17app/router/config.proto\x12\x0fxray.app.router\x1a!common/serial/typed_message.proto\x1a\x15common/net/port.proto\x1a\x18common/net/network.proto\x1a\x1bcommon/geodata/geodat.proto\"\x95\b\n" +
 	"\vRoutingRule\x12\x12\n" +
 	"\x03tag\x18\x01 \x01(\tH\x00R\x03tag\x12%\n" +
 	"\rbalancing_tag\x18\f \x01(\tH\x00R\fbalancingTag\x12\x19\n" +
@@ -691,7 +701,8 @@ const file_app_router_config_proto_rawDesc = "" +
 	"\aprocess\x18\x15 \x03(\tR\aprocess\x128\n" +
 	"\awebhook\x18\x16 \x01(\v2\x1e.xray.app.router.WebhookConfigR\awebhook\x12\x19\n" +
 	"\blocal_os\x18\x17 \x03(\tR\alocalOs\x12\x1a\n" +
-	"\bpriority\x18\x18 \x01(\x05R\bpriority\x1a=\n" +
+	"\bpriority\x18\x18 \x01(\x05R\bpriority\x12\x1b\n" +
+	"\torder_key\x18\x19 \x01(\tR\borderKey\x1a=\n" +
 	"\x0fAttributesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\f\n" +

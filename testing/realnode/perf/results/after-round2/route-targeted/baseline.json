@@ -1,0 +1,25 @@
+{
+  "time": "2026-10-14T16:41:48Z",
+  "platform": "linux/arm64",
+  "go": "go1.27.1",
+  "cpus": 8,
+  "revision": "cadabb16f0c1ff3107426e7ccd1b047122be3811-route",
+  "measurements": [
+    {
+      "name": "route_add_100000",
+      "unit": "ms",
+      "p50": 0.01125,
+      "p99": 0.04571,
+      "max": 0.04571,
+      "samples": 100
+    },
+    {
+      "name": "route_remove_100000",
+      "unit": "ms",
+      "p50": 0.006542,
+      "p99": 0.027876,
+      "max": 0.027876,
+      "samples": 100
+    }
+  ]
+}

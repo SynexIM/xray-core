@@ -134,6 +134,7 @@ type RouterRule struct {
 	BalancerTag string `json:"balancerTag"`
 	// Priority：大的先匹配，相同的按加入先后。
 	Priority int32 `json:"priority"`
+	OrderKey string `json:"orderKey"`
 }
 
 type WebhookRuleConfig struct {
@@ -176,6 +177,7 @@ func parseFieldRule(msg json.RawMessage) (*router.RoutingRule, error) {
 	rule := new(router.RoutingRule)
 	rule.RuleTag = rawFieldRule.RuleTag
 	rule.Priority = rawFieldRule.Priority
+	rule.OrderKey = rawFieldRule.OrderKey
 	switch {
 	case len(rawFieldRule.OutboundTag) > 0:
 		rule.TargetTag = &router.RoutingRule_Tag{

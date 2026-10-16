@@ -63,6 +63,9 @@ message RoutingRule {
   // Larger priorities match first; equal priorities keep insertion order.
   // Not a matching condition: rules differing only here stay indexable.
   int32 priority = 24;
+  // Optional stable ordering within a priority (e.g. creation time + resource name).
+  // Empty keys retain insertion order. Not a matching condition.
+  string order_key = 25;
 }
 
 message WebhookConfig {

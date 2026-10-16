@@ -300,38 +300,27 @@ func (r *Router) ReplaceRule(message *serial.TypedMessage) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	old := r.rules.Load().allRules()
-	existing := make(map[string]bool, len(old))
-	for _, rule := range old {
-		if !tags[rule.RuleTag] {
-			existing[rule.RuleTag] = true
+	next := r.rules.Load().clone()
+	positions := make(map[string]uint64, len(tags))
+	var removed []*Rule
+	for tag := range tags {
+		if entry, exists := next.byTag.Get(taggedRule{tag: tag}); exists {
+			positions[tag] = entry.position.seq
+			removed = append(removed, next.remove(tag))
 		}
 	}
-	added, _, err := r.buildConfig(config, *r.balancers.Load(), func(tag string) bool { return existing[tag] })
+	added, _, err := r.buildConfig(config, *r.balancers.Load(), next.hasTag)
 	if err != nil {
-		return err
+		return err // clone 未发布，旧规则与通知器均未改变。
 	}
-	next := make([]*Rule, 0, len(old)+len(added))
-	replacements := make(map[string]*Rule, len(added))
 	for _, rule := range added {
-		replacements[rule.RuleTag] = rule
-	}
-	removed := []*Rule{}
-	for _, rule := range old {
-		if replacement := replacements[rule.RuleTag]; replacement != nil {
-			next = append(next, replacement)
-			removed = append(removed, rule)
-			delete(replacements, rule.RuleTag)
+		if seq, exists := positions[rule.RuleTag]; exists {
+			next.insert(rule, seq)
 		} else {
-			next = append(next, rule)
+			next.append([]*Rule{rule})
 		}
 	}
-	for _, rule := range added {
-		if replacements[rule.RuleTag] != nil {
-			next = append(next, rule)
-		}
-	}
-	r.rules.Store(newRuleSet(next))
+	r.rules.Store(next)
 	closeWebhooks(removed)
 	return nil
 }
